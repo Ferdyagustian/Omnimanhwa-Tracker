@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: omte_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-omnimanhwa}
+      POSTGRES_USER: ${DB_USER:-omniuser}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-omnipassword123}
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    command: >
+      postgres 
+      -c shared_buffers=32MB 
+      -c max_connections=20 
+      -c work_mem=2MB 
+      -c maintenance_work_mem=16MB 
+      -c effective_cache_size=64MB
+    deploy:
+      resources:
+        limits:
+          memory: 180M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-omniuser} -d ${DB_NAME:-omnimanhwa}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  omte-core:
+    build: .
+    container_name: omte_core
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+
+volumes:
+  pgdata:

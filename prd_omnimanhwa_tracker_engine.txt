@@ -1,0 +1,237 @@
+================================================================================
+PRODUCT REQUIREMENTS DOCUMENT (PRD)
+OMNIMANHWA TRACKER ENGINE (OMTE) - SISTEM PELACAK MANHWA 24/7 & AI ALIAS RESOLVER
+================================================================================
+
+METADATA DOKUMEN
+--------------------------------------------------------------------------------
+Nama Proyek          : OmniManhwa Tracker Engine (OMTE)
+Versi Dokumen        : v1.2 (Ponytail Lean Architecture - Azure VM 1GB RAM Battle-Tested)
+Peran Penyusun       : Senior AI Engineer & Fullstack Architect (Ponytail Mode)
+Infrastruktur Target : Microsoft Azure VM (Standard_B2ats_v2: 2 vCPU, 1 GiB RAM 
+                       + 4 GB Swap, Ubuntu Server 24.04 LTS x64 Gen2, SSD 30 GiB)
+Target Situs Awal    : mangadex.org, asurascans.com, vortexscans.org, 
+                       mgeko.cc, komiku.org
+
+
+1. TUJUAN & LATAR BELAKANG PRODUK (PRODUCT OVERVIEW)
+--------------------------------------------------------------------------------
+1.1 Pernyataan Masalah
+a) Fragmentasi Judul (Multi-Alias Problem):
+   Satu manhwa memiliki variasi nama berbeda di berbagai situs (judul asli Korea,
+   judul resmi Inggris, judul scanlator, hingga judul lokal Bahasa Indonesia).
+b) Desinkronisasi Rilis Lintas Bahasa:
+   Scanlator Inggris (Asura, Vortex, Mgeko) rilis lebih cepat daripada translasi 
+   Indonesia (Komiku), membutuhkan pelacakan terpisah (EN vs ID).
+c) Keterbatasan Ketat RAM VM 1 GiB & Proteksi Anti-Bot:
+   Menjalankan headless browser terus-menerus atau menambah terlalu banyak container
+   (Postgres + Redis + Celery) akan memicu OOM Killer dan disk thrashing pada Swap.
+   Cloudflare Turnstile dan pemblokiran IP datacenter (Azure) memerlukan penanganan
+   yang presisi dan hemat resource.
+
+1.2 Metrik Keberhasilan (Success Metrics / SLA)
+- Akurasi Pencocokan Judul: >= 95% alias berhasil dipetakan otomatis via MangaDex
+  dan RapidFuzz; AI Disambiguator hanya aktif saat pendaftaran awal.
+- Latensi Notifikasi: <= 15 menit sejak chapter baru rilis di situs sumber.
+- Efisiensi Resource VM: Total konsumsi RAM aktif <= 650 MB (bebas OOM & disk thrashing).
+- Uptime 24/7: >= 99.5% tanpa intervensi restart manual.
+
+
+2. MATRIKS TARGET SUMBER DATA (DATA SOURCE MATRIX)
+--------------------------------------------------------------------------------
+1) Kode Adapter : MANGADEX
+   Domain Utama : mangadex.org
+   Bahasa       : Multi (EN / ID)
+   Metode Utama : Official REST API (api.mangadex.org)
+   Karakteristik: Sumber utama seeding alias dan UUID. Sangat stabil.
+
+2) Kode Adapter : ASURA
+   Domain Utama : asurascans.com (auto-follow redirect domain)
+   Bahasa       : Inggris (EN)
+   Metode Utama : curl_cffi + Next.js Hydration JSON Parser / Selectolax
+   Fallback     : Ephemeral Stealth Worker (single-run) jika terkena Turnstile.
+
+3) Kode Adapter : VORTEX
+   Domain Utama : vortexscans.org (auto-follow redirect domain)
+   Bahasa       : Inggris (EN)
+   Metode Utama : curl_cffi + Script State Parser / Selectolax
+   Fallback     : Ephemeral Stealth Worker (single-run).
+
+4) Kode Adapter : MGEKO
+   Domain Utama : mgeko.cc
+   Bahasa       : Inggris (EN)
+   Metode Utama : curl_cffi + Selectolax HTML Parser pada /jumbo/manga/
+   Fallback     : Ephemeral Stealth Worker.
+
+5) Kode Adapter : KOMIKU
+   Domain Utama : komiku.org
+   Bahasa       : Indonesia (ID)
+   Metode Utama : curl_cffi + Endpoint HTMX/HTML
+   Fallback     : Egress Proxy (residential/rotating) jika IP Azure terkena blocklist ASN.
+
+
+3. KEBUTUHAN FUNGSIONAL (FUNCTIONAL REQUIREMENTS)
+--------------------------------------------------------------------------------
+FR-01: Pendaftaran Manhwa & Auto-Alias Seeding
+- Pengguna mendaftarkan manhwa via bot Telegram: `/add [judul]`.
+- Sistem memanggil API MangaDex (GET https://api.mangadex.org/manga?title={input}).
+- Ambil UUID, canonical title, cover image, dan seluruh daftar altTitles (en, ko, ko-ro, id, ja-ro).
+- Normalisasi teks (lowercase, hapus tanda baca, bersihkan stop words: "manhwa", "komik", "sub indo")
+  dan simpan ke tabel `manhwa_aliases`.
+
+FR-02: 3-Tier Entity Resolution (HANYA Dijalankan Saat Onboarding / Add)
+*Catatan Desain Ponytail: AI LLM TIDAK PERNAH dijalankan di background cron polling rutin
+untuk menghemat latensi, kuota API, dan CPU.*
+- Lapis 1 (Exact Normalized Match): Pencocokan string langsung terhadap indeks `normalized_title`.
+- Lapis 2 (RapidFuzz Scoring):
+  * Skor >= 88.0 : Otomatis ditautkan (`manhwa_sources`).
+  * Skor < 60.0  : Ditolak otomatis.
+- Lapis 3 (AI Semantic Disambiguator - Skor 60.0 s.d. 87.9):
+  * Dipanggil hanya sekali saat user mendaftarkan judul yang ambigu.
+  * Mengirim daftar alias dan sinopsis singkat ke Gemini Flash dengan output JSON: `{"is_match": bool}`.
+  * Jika true, simpan URL ke `manhwa_sources` dan daftarkan variasi nama baru ke `manhwa_aliases`.
+
+FR-03: Lean Scraping Engine & Cloudflare Clearance (Tanpa Redis)
+- Tier 1 (Default Hemat RAM): Request menggunakan `curl_cffi` dengan `impersonate="chrome124"`.
+- Tier 2 (Ephemeral Challenge Solver):
+  * Jika menerima HTTP 403/503 Cloudflare Turnstile, panggil worker browser stealth on-demand.
+  * Batas ketat: Maksimal 1 browser instance berjalan bersamaan, batas waktu 30 detik, 
+    langsung bunuh proses browser setelah cookie didapat agar RAM kembali lega.
+- Tier 3 (Cookie & Session Persistence Tanpa Redis):
+  * Nilai `cf_clearance` dan User-Agent disimpan langsung di memori aplikasi (dict cache) 
+    dan di-persist ke tabel `site_configs` di database (TTL 2 jam).
+  * ATURAN KRITIS: User-Agent dan JA3 TLS profile pada `curl_cffi` WAJIB identik 1:1 
+    dengan browser yang menyelesaikan challenge, agar cookie tidak ditolak Cloudflare.
+- Fallback Proxy: Dukungan konfigurasi `proxy_url` per situs jika IP datacenter Azure diblokir.
+
+FR-04: Ekstraksi Chapter, Season Reset, dan Deduplikasi Mutlak
+- Normalisasi Angka Chapter: Regex ekstraksi angka desimal (contoh: "Ch. 89.5" -> 89.5).
+- Penanganan Season Reset & Side Story:
+  * Deteksi kata kunci khusus seperti "Season 2", "S2", "Prologue", "Side Story", "Extra".
+  * Jika judul mengandung penanda Season baru atau Side Story, bypass validasi `> latest_chapter`.
+- Deduplikasi Mutlak:
+  * Tabel `chapter_logs` memiliki constraint `UNIQUE(manhwa_id, site_code, chapter_url)`.
+  * Notifikasi HANYA dikirim jika kombinasi chapter URL belum pernah tercatat di `chapter_logs`.
+- Pemisahan Notifikasi Bahasa:
+  * `latest_chapter_en`: Asura, Vortex, Mgeko, MangaDex (EN).
+  * `latest_chapter_id`: Komiku, MangaDex (ID).
+
+FR-05: Sistem Notifikasi & Telegram Bot (Anti-Hotlink 403)
+- Penanganan Gambar Sampul:
+  * Bot TIDAK mengirim `cover_image_url` mentah ke Telegram (mencegah error 400/403 dari server CDN).
+  * Tracker mengunduh buffer gambar secara streaming dengan header `Referer` yang sesuai,
+    lalu mengirimkannya ke Telegram sebagai binary multipart/form-data.
+- Format Pesan Notifikasi:
+  * Foto Sampul + Judul Utama Manhwa.
+  * Nomor Chapter & Judul Asli Chapter.
+  * Tag Bahasa: [EN] atau [ID].
+  * Tombol Inline Tautan Langsung ke Chapter Sumber.
+- Daftar Perintah Bot:
+  * `/add [judul]`                  : Daftarkan manhwa baru & auto-bind lintas situs.
+  * `/list`                         : Menampilkan daftar pantau dan status chapter EN/ID terakhir.
+  * `/bind [manhwa_id] [site] [url]`: Tautkan URL slug secara manual jika auto-match gagal.
+  * `/domain [site] [new_url]`      : Perbarui domain dasar situs secara manual.
+  * `/health`                       : Cek pemakaian RAM/Swap, status database, dan latensi per adapter.
+
+FR-06: Domain Auto-Healing (301/302 Redirect Auto-Capture)
+- Tabel `manhwa_sources` hanya menyimpan path relatif (`relative_slug`, misal `/series/solo-leveling`).
+- Base URL disimpan di tabel `site_configs`.
+- Jika request mendeteksi redirect HTTP 301/302 ke domain baru (misal `asurascans.com` -> `asuracomic.net`),
+  engine otomatis memperbarui `base_url` di `site_configs` tanpa perlu intervensi manual.
+- Jika situs gagal diakses 5 kali berturut-turut, status diubah menjadi `DEGRADED`, 
+  interval polling dijeda 1 jam, dan admin menerima alert via Telegram.
+
+
+4. DESAIN SKEMA DATABASE (POSTGRESQL DATA MODEL)
+--------------------------------------------------------------------------------
+-- 1. Tabel Konfigurasi Situs (Termasuk Cookie & Proxy, Tanpa Butuh Redis)
+CREATE TABLE site_configs (
+    site_code VARCHAR(20) PRIMARY KEY, -- 'MANGADEX', 'ASURA', 'VORTEX', 'MGEKO', 'KOMIKU'
+    base_url VARCHAR(255) NOT NULL,
+    language VARCHAR(5) NOT NULL,      -- 'EN', 'ID', 'MULTI'
+    poll_interval_minutes INT DEFAULT 15,
+    is_active BOOLEAN DEFAULT TRUE,
+    consecutive_failures INT DEFAULT 0,
+    last_polled_at TIMESTAMPTZ,
+    cf_clearance_cookie TEXT,
+    cf_user_agent TEXT,
+    cf_cookie_expires_at TIMESTAMPTZ,
+    proxy_url TEXT
+);
+
+-- 2. Tabel Entitas Utama Manhwa
+CREATE TABLE manhwas (
+    id SERIAL PRIMARY KEY,
+    mangadex_uuid UUID UNIQUE,
+    canonical_title VARCHAR(255) NOT NULL,
+    cover_image_url TEXT,
+    latest_chapter_en NUMERIC(6, 2) DEFAULT 0,
+    latest_chapter_id NUMERIC(6, 2) DEFAULT 0,
+    is_tracking BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 3. Tabel Variasi Nama / Alias
+CREATE TABLE manhwa_aliases (
+    id SERIAL PRIMARY KEY,
+    manhwa_id INT REFERENCES manhwas(id) ON DELETE CASCADE,
+    alias_title VARCHAR(255) NOT NULL,
+    normalized_title VARCHAR(255) NOT NULL,
+    lang_code VARCHAR(10),
+    UNIQUE(manhwa_id, normalized_title)
+);
+CREATE INDEX idx_aliases_normalized ON manhwa_aliases(normalized_title);
+
+-- 4. Tabel Pemetaan Sumber Website per Manhwa
+CREATE TABLE manhwa_sources (
+    id SERIAL PRIMARY KEY,
+    manhwa_id INT REFERENCES manhwas(id) ON DELETE CASCADE,
+    site_code VARCHAR(20) REFERENCES site_configs(site_code),
+    relative_slug VARCHAR(500) NOT NULL,
+    last_chapter_num NUMERIC(6, 2) DEFAULT 0,
+    last_chapter_url TEXT,
+    last_checked_at TIMESTAMPTZ,
+    UNIQUE(manhwa_id, site_code)
+);
+
+-- 5. Tabel Riwayat Rilis & Deduplikasi Notifikasi
+CREATE TABLE chapter_logs (
+    id SERIAL PRIMARY KEY,
+    manhwa_id INT REFERENCES manhwas(id) ON DELETE CASCADE,
+    site_code VARCHAR(20) REFERENCES site_configs(site_code),
+    language VARCHAR(5) NOT NULL,
+    chapter_num NUMERIC(6, 2) NOT NULL,
+    chapter_raw_title VARCHAR(255),
+    chapter_url TEXT NOT NULL,
+    notified_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT uq_chapter_notification UNIQUE(manhwa_id, site_code, chapter_url)
+);
+
+
+5. SPESIFIKASI INFRASTRUKTUR & LEAN DEPLOYMENT (DOCKER)
+--------------------------------------------------------------------------------
+5.1 Profil Server Azure
+- VM Size     : Standard_B2ats_v2 (2 vCPU, 1 GiB RAM)
+- OS & Disk   : Ubuntu Server 24.04 LTS x64 Gen2, Standard SSD 30 GiB
+- Swap Memory : 4 GB Swapfile permanen (vm.swappiness = 10 untuk cegah thrashing agresif)
+
+5.2 Komposisi Container (Pruned & Optimized - Tanpa Redis)
+- `postgres:16-alpine` : Limit RAM 180 MB (`shared_buffers = 32MB`, `max_connections = 20`)
+- `omte-core` (Python) : Limit RAM 300 MB (Scraper, Scheduler, Telegram Bot, In-Memory Cache)
+- `stealth-solver`     : On-demand container / subprocess (Strict concurrency = 1, 
+                         memory limit 400 MB, kill langsung setelah cookie diperoleh)
+- Total Alokasi RAM    : ~480 MB normal, ~880 MB burst saat challenge solver aktif (aman di 1GB).
+
+5.3 Etika Jaringan & Rate Limiting
+- Maksimal 1 request per 5 detik untuk domain yang sama.
+- Random Jitter: 10 hingga 30 detik pada setiap siklus polling.
+
+
+6. PETA JALAN IMPLEMENTASI (DEVELOPMENT ROADMAP)
+--------------------------------------------------------------------------------
+- Fase 1 (Hari 1-2): Setup VM Azure (Swap 4GB, Docker), skema PostgreSQL, integrasi MangaDex API.
+- Fase 2 (Hari 3-4): BaseScraper (curl_cffi) + Adapter Asura, Vortex, Mgeko, Komiku + Auto-redirect.
+- Fase 3 (Hari 5-6): RapidFuzz + AI Fallback pada `/add`, Chapter Regex + Deduplikasi via `chapter_logs`.
+- Fase 4 (Hari 7)  : Bot Telegram (Image streaming multipart) + Deploy 24/7 dan Monitoring Healthcheck.
+================================================================================
