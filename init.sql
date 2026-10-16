@@ -19,10 +19,10 @@ CREATE TABLE IF NOT EXISTS site_configs (
 -- Seed Data Situs Awal
 INSERT INTO site_configs (site_code, base_url, language, poll_interval_minutes)
 VALUES 
-    ('MANGADEX', 'https://mangadex.org', 'MULTI', 15),
-    ('ASURA', 'https://asurascans.com', 'EN', 10),
-    ('VORTEX', 'https://vortexscans.org', 'EN', 10),
     ('MGEKO', 'https://www.mgeko.cc', 'EN', 15),
+    ('MANGADEX', 'https://mangadex.org', 'MULTI', 15),
+    ('VORTEX', 'https://vortexscans.org', 'EN', 10),
+    ('ASURA', 'https://asurascans.com', 'EN', 10),
     ('KOMIKU', 'https://komiku.org', 'ID', 15)
 ON CONFLICT (site_code) DO NOTHING;
 
