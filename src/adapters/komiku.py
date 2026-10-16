@@ -15,32 +15,39 @@ class KomikuAdapter(BaseScraper):
         Mencari komik di Komiku berdasarkan kata kunci judul.
         Returns: [{'slug': str, 'title': str, 'cover_url': Optional[str]}]
         """
-        url = f"?s={quote_plus(query)}"
-        html, _, _ = await self.get_html(url)
+        # Gunakan API endpoint HTMX komiku untuk mendapatkan serial komik
+        search_url = f"https://api.komiku.org/?post_type=manga&s={quote_plus(query)}"
+        html, _, _ = await self.get_html(search_url)
         if not html:
             return []
 
         results: List[Dict[str, Any]] = []
         seen = set()
-        for a in html.css(".bge a, .daftar a, a[href*='/manga/']"):
+        for b in html.css(".bge"):
+            a = b.css_first("a[href*='/manga/']") or b.css_first(".kan a") or b.css_first("a")
+            if not a:
+                continue
             href = a.attributes.get("href", "")
             if not href or "/manga/" not in href or any(x in href for x in ["/ch/", "/chapter", "genre", "category", "tag"]):
                 continue
-            text = a.text(strip=True) or a.attributes.get("title", "").strip()
-            if not text or len(text) <= 2 or text.replace(".", "").isdigit():
+
+            h3 = b.css_first("h3")
+            title = (h3.text(strip=True) if h3 else (a.text(strip=True) or a.attributes.get("title", ""))).strip()
+            if not title or len(title) <= 2 or title.replace(".", "").isdigit():
                 continue
+
             path = urlparse(href).path if href.startswith("http") else href
             clean_slug = path if path.startswith("/") else f"/{path}"
             if clean_slug in seen:
                 continue
             seen.add(clean_slug)
 
-            img = a.css_first("img")
+            img = b.css_first("img")
             img_src = img.attributes.get("src") if img else None
 
             results.append({
                 "slug": clean_slug,
-                "title": text,
+                "title": title,
                 "cover_url": img_src
             })
         return results
