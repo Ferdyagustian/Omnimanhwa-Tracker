@@ -47,23 +47,15 @@ def parse_chapter_info(title_or_text: str) -> Tuple[Optional[float], bool, str]:
     )
 
     # 1. Pola dash-decimal pada URL slug, misal: chapter-199-5 atau ch-89-5
-    dash_decimal = re.search(r"(?:chapter|ch\.?|ep\.?|episode)[-_](\d+)[-_](\d+)", text, re.IGNORECASE)
+    dash_decimal = re.search(r"(?:chapter|ch\.?|ep\.?|episode)[-_/](\d+)[-_](\d+)", text, re.IGNORECASE)
     if dash_decimal:
         try:
             return float(f"{dash_decimal.group(1)}.{dash_decimal.group(2)}"), is_special, text
         except ValueError:
             pass
 
-    # 2. Pola URL path /chapter/(\d+(?:\.\d+)?)
-    path_match = re.search(r"/chapter/(\d+(?:\.\d+)?)", text, re.IGNORECASE)
-    if path_match:
-        try:
-            return float(path_match.group(1)), is_special, text
-        except ValueError:
-            pass
-    
-    # 3. Regex ekstraksi teks standar (e.g., "Chapter 123.5", "Ch. 89", "Ch 12", "Episode 45")
-    match = re.search(r"(?:chapter|ch\.?|ep\.?|episode)\s*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
+    # 2. Pola chapter dengan separator spasi, dash, underscore, atau slash (e.g., Chapter 123, chapter-226, /chapter/13, Chapter226New)
+    match = re.search(r"(?:chapter|ch\.?|ep\.?|episode)[-_/\s]*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
     if match:
         try:
             return float(match.group(1)), is_special, text

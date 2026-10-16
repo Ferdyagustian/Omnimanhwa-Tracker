@@ -39,7 +39,7 @@ class BaseScraper:
         proxies = {"http": self.proxy_url, "https": self.proxy_url} if self.proxy_url else None
 
         try:
-            async with AsyncSession(impersonate="chrome124", proxies=proxies) as session:
+            async with AsyncSession(impersonate="chrome124", proxies=proxies, verify=False) as session:
                 response = await session.get(
                     url,
                     headers=headers,
