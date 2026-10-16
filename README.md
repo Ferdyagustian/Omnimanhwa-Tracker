@@ -67,6 +67,13 @@ docker compose up -d --build
 docker compose logs -f omte-core
 ```
 
+### Memperbarui / Redeploy Aplikasi di Server
+
+```bash
+git pull origin main
+docker compose up -d --build omte-core
+```
+
 ### 2. Menjalankan Secara Lokal (Development / SQLite Fallback)
 
 ```bash
@@ -94,7 +101,7 @@ omnimanhwa/
 │   ├── db.py              # Layer database (PostgreSQL asyncpg + SQLite fallback)
 │   ├── main.py            # Entry point & background tracker worker loop
 │   └── normalizer.py      # Ekstraksi angka chapter, regex, & title normalizer
-├── tests/                 # Unit tests (24 test cases lengkap)
+├── tests/                 # Unit tests (25 test cases lengkap)
 ├── docker-compose.yml     # Orkestrasi Docker (dengan mem_limit ketat)
 ├── Dockerfile             # Multi-stage Docker image
 ├── init.sql               # Skema PostgreSQL & indeks retensi
