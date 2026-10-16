@@ -1,3 +1,4 @@
+import uuid
 import asyncpg
 import logging
 from typing import Optional, List, Dict, Any
@@ -42,6 +43,7 @@ class Database:
                 "UPDATE site_configs SET base_url = $1 WHERE site_code = $2",
                 new_base_url, site_code
             )
+            logger.info(f"Updated base_url for {site_code} to {new_base_url}")
 
     @classmethod
     async def update_site_cf_cookie(cls, site_code: str, cookie: str, user_agent: str, expires_at):
@@ -60,15 +62,32 @@ class Database:
     async def insert_manhwa(cls, mangadex_uuid: Optional[str], canonical_title: str, cover_image_url: Optional[str]) -> int:
         pool = await cls.get_pool()
         async with pool.acquire() as conn:
+            if mangadex_uuid:
+                try:
+                    uuid_obj = uuid.UUID(str(mangadex_uuid))
+                except (ValueError, TypeError, AttributeError):
+                    uuid_obj = None
+
+                if uuid_obj:
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO manhwas (mangadex_uuid, canonical_title, cover_image_url)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (mangadex_uuid) DO UPDATE 
+                        SET canonical_title = EXCLUDED.canonical_title, cover_image_url = EXCLUDED.cover_image_url, updated_at = NOW()
+                        RETURNING id
+                        """,
+                        uuid_obj, canonical_title, cover_image_url
+                    )
+                    return row["id"]
+
             row = await conn.fetchrow(
                 """
-                INSERT INTO manhwas (mangadex_uuid, canonical_title, cover_image_url)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (mangadex_uuid) DO UPDATE 
-                SET canonical_title = EXCLUDED.canonical_title, cover_image_url = EXCLUDED.cover_image_url, updated_at = NOW()
+                INSERT INTO manhwas (canonical_title, cover_image_url)
+                VALUES ($1, $2)
                 RETURNING id
                 """,
-                mangadex_uuid, canonical_title, cover_image_url
+                canonical_title, cover_image_url
             )
             return row["id"]
 
@@ -91,6 +110,20 @@ class Database:
         async with pool.acquire() as conn:
             rows = await conn.fetch("SELECT * FROM manhwas WHERE is_tracking = TRUE ORDER BY canonical_title ASC")
             return [dict(r) for r in rows]
+
+    @classmethod
+    async def get_manhwa_by_id(cls, manhwa_id: int) -> Optional[Dict[str, Any]]:
+        pool = await cls.get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM manhwas WHERE id = $1", manhwa_id)
+            return dict(row) if row else None
+
+    @classmethod
+    async def get_aliases_for_manhwa(cls, manhwa_id: int) -> List[str]:
+        pool = await cls.get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT alias_title FROM manhwa_aliases WHERE manhwa_id = $1", manhwa_id)
+            return [r["alias_title"] for r in rows]
 
     @classmethod
     async def bind_source(cls, manhwa_id: int, site_code: str, relative_slug: str):

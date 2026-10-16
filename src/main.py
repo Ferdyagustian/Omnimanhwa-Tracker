@@ -6,6 +6,7 @@ from typing import Dict, Any
 from src.config import Config
 from src.db import Database
 from src.bot.telegram_bot import setup_telegram_bot, send_release_notification
+from src.adapters.mangadex import MangaDexAdapter
 from src.adapters.asura import AsuraAdapter
 from src.adapters.komiku import KomikuAdapter
 from src.adapters.vortex import VortexAdapter
@@ -17,8 +18,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("OMTE_CORE")
 
-# Factory adapter map
+# Factory adapter map (Semua 5 situs terdaftar)
 ADAPTER_CLASSES = {
+    "MANGADEX": MangaDexAdapter,
     "ASURA": AsuraAdapter,
     "KOMIKU": KomikuAdapter,
     "VORTEX": VortexAdapter,
@@ -32,6 +34,7 @@ async def poll_single_source(bot, manhwa: Dict[str, Any], source: Dict[str, Any]
     site_code = source["site_code"]
     adapter_cls = ADAPTER_CLASSES.get(site_code)
     if not adapter_cls:
+        logger.warning(f"Adapter untuk {site_code} tidak ditemukan!")
         return
 
     adapter = adapter_cls(
@@ -48,38 +51,42 @@ async def poll_single_source(bot, manhwa: Dict[str, Any], source: Dict[str, Any]
     if not chapters:
         return
 
-    # Ambil chapter paling baru
-    latest = chapters[0]
-    ch_num = latest["chapter_num"]
-    raw_title = latest["chapter_raw_title"]
-    ch_url = latest["chapter_url"]
-    lang = site_cfg.get("language", "EN")
+    default_lang = site_cfg.get("language", "EN")
 
-    # Rekam ke database & cek apakah ini chapter baru (deduplikasi)
-    is_new = await Database.record_chapter_log(
-        manhwa_id=manhwa["id"],
-        site_code=site_code,
-        language=lang,
-        chapter_num=ch_num,
-        chapter_raw_title=raw_title,
-        chapter_url=ch_url
-    )
+    # Cek hingga 5 chapter terbaru dalam urutan nomor terkecil ke terbesar
+    # untuk menangani jika ada rilis banyak chapter sekaligus (mass release)
+    recent_chapters = list(reversed(chapters[:5]))
+    for ch in recent_chapters:
+        ch_num = ch["chapter_num"]
+        raw_title = ch.get("chapter_raw_title", f"Chapter {ch_num}")
+        ch_url = ch["chapter_url"]
+        lang = ch.get("language") or default_lang
 
-    if is_new and Config.TELEGRAM_ADMIN_CHAT_ID:
-        logger.info(f"🎉 Chapter Baru Terdeteksi: '{manhwa['canonical_title']}' Ch. {ch_num} ({site_code})! Mengirim notifikasi...")
-        try:
-            await send_release_notification(
-                bot=bot,
-                chat_id=Config.TELEGRAM_ADMIN_CHAT_ID,
-                title=manhwa["canonical_title"],
-                chapter_num=ch_num,
-                language=lang,
-                site_code=site_code,
-                chapter_url=ch_url,
-                cover_image_url=manhwa.get("cover_image_url")
-            )
-        except Exception as e:
-            logger.error(f"Gagal mengirim notifikasi Telegram: {e}")
+        # Rekam ke database & cek apakah ini chapter baru (deduplikasi mutlak)
+        is_new = await Database.record_chapter_log(
+            manhwa_id=manhwa["id"],
+            site_code=site_code,
+            language=lang,
+            chapter_num=ch_num,
+            chapter_raw_title=raw_title,
+            chapter_url=ch_url
+        )
+
+        if is_new and Config.TELEGRAM_ADMIN_CHAT_ID:
+            logger.info(f"🎉 Chapter Baru Terdeteksi: '{manhwa['canonical_title']}' Ch. {ch_num} ({site_code} - {lang})! Mengirim notifikasi...")
+            try:
+                await send_release_notification(
+                    bot=bot,
+                    chat_id=Config.TELEGRAM_ADMIN_CHAT_ID,
+                    title=manhwa["canonical_title"],
+                    chapter_num=ch_num,
+                    language=lang,
+                    site_code=site_code,
+                    chapter_url=ch_url,
+                    cover_image_url=manhwa.get("cover_image_url")
+                )
+            except Exception as e:
+                logger.error(f"Gagal mengirim notifikasi Telegram: {e}")
 
 async def tracker_worker_loop(bot):
     """
@@ -95,7 +102,6 @@ async def tracker_worker_loop(bot):
             pool = await Database.get_pool()
             
             for m in manhwas:
-                # Ambil semua sumber terikat untuk manhwa ini
                 async with pool.acquire() as conn:
                     sources = await conn.fetch(
                         "SELECT * FROM manhwa_sources WHERE manhwa_id = $1",
@@ -107,7 +113,7 @@ async def tracker_worker_loop(bot):
                     if site_cfg and site_cfg.get("is_active", True):
                         await poll_single_source(bot, m, dict(s), site_cfg)
                         # Jitter antar request
-                        await asyncio.sleep(random.uniform(2.0, 5.0))
+                        await asyncio.sleep(random.uniform(1.5, 3.5))
 
             # Jeda siklus polling berkala (default 15 menit) + jitter
             base_delay = Config.POLL_INTERVAL_MINUTES * 60
@@ -150,7 +156,6 @@ async def main():
         try:
             loop.add_signal_handler(sig, stop_event.set)
         except NotImplementedError:
-            # Windows tidak mendukung add_signal_handler untuk semua signal
             pass
 
     try:

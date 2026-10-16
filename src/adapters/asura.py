@@ -20,9 +20,8 @@ class AsuraAdapter(BaseScraper):
             return []
 
         chapters: List[Dict[str, Any]] = []
+        seen_urls = set()
         
-        # Asura biasanya me-render link chapter dengan tag a berisikan pola href 'chapter'
-        # Contoh selector: div.pl-4 a, div[class*="chapter"] a, a[href*="/chapter/"]
         links = html.css("a[href*='/chapter/'], a[href*='-chapter-']")
         
         for a in links:
@@ -32,11 +31,12 @@ class AsuraAdapter(BaseScraper):
                 continue
 
             full_url = href if href.startswith("http") else f"{self.base_url}/{href.lstrip('/')}"
+            if full_url in seen_urls:
+                continue
+            seen_urls.add(full_url)
             
-            # Parsing angka chapter dari title text atau slug url
             ch_num, is_special, raw_title = parse_chapter_info(title_text)
             if ch_num is None:
-                # Coba ekstrak dari href
                 ch_num, is_special, _ = parse_chapter_info(href)
 
             if ch_num is not None:
@@ -47,6 +47,5 @@ class AsuraAdapter(BaseScraper):
                     "is_special": is_special
                 })
 
-        # Urutkan dari chapter terbesar ke terkecil
         chapters.sort(key=lambda x: x["chapter_num"], reverse=True)
         return chapters

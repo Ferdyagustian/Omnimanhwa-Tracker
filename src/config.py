@@ -1,4 +1,5 @@
 import os
+from urllib.parse import quote_plus
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -18,10 +19,16 @@ class Config:
     # Gemini
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
+    # Network & Proxy
+    PROXY_URL = os.getenv("PROXY_URL", "")
+
     # Engine
     POLL_INTERVAL_MINUTES = int(os.getenv("POLL_INTERVAL_MINUTES", "15"))
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
     @classmethod
     def get_db_dsn(cls) -> str:
-        return f"postgresql://{cls.DB_USER}:{cls.DB_PASSWORD}@{cls.DB_HOST}:{cls.DB_PORT}/{cls.DB_NAME}"
+        # Safe URL encoding untuk username dan password yang mengandung karakter khusus
+        user = quote_plus(cls.DB_USER)
+        password = quote_plus(cls.DB_PASSWORD)
+        return f"postgresql://{user}:{password}@{cls.DB_HOST}:{cls.DB_PORT}/{cls.DB_NAME}"

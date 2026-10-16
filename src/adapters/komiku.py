@@ -19,6 +19,7 @@ class KomikuAdapter(BaseScraper):
             return []
 
         chapters: List[Dict[str, Any]] = []
+        seen_urls = set()
         
         # Di Komiku: baris chapter berada di dalam tabel #Daftar_Chapter td.judulseries a
         links = html.css("#Daftar_Chapter a, .judulseries a, a[href*='/ch/'], a[href*='/chapter-']")
@@ -30,6 +31,9 @@ class KomikuAdapter(BaseScraper):
                 continue
 
             full_url = href if href.startswith("http") else f"{self.base_url}/{href.lstrip('/')}"
+            if full_url in seen_urls:
+                continue
+            seen_urls.add(full_url)
             
             ch_num, is_special, raw_title = parse_chapter_info(title_text)
             if ch_num is None:

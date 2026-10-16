@@ -15,6 +15,7 @@ class VortexAdapter(BaseScraper):
             return []
 
         chapters: List[Dict[str, Any]] = []
+        seen_urls = set()
         links = html.css("a[href*='/chapter/'], a[href*='-chapter-'], div[class*='chapter'] a")
         
         for a in links:
@@ -24,6 +25,10 @@ class VortexAdapter(BaseScraper):
                 continue
 
             full_url = href if href.startswith("http") else f"{self.base_url}/{href.lstrip('/')}"
+            if full_url in seen_urls:
+                continue
+            seen_urls.add(full_url)
+
             ch_num, is_special, _ = parse_chapter_info(title_text)
             if ch_num is None:
                 ch_num, is_special, _ = parse_chapter_info(href)

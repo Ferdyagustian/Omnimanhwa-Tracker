@@ -1,9 +1,10 @@
 import asyncio
 import random
 import logging
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Tuple
 from curl_cffi.requests import AsyncSession
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser as HTMLParser
+from src.db import Database
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ class BaseScraper:
         if self.cf_cookie:
             cookies["cf_clearance"] = self.cf_cookie
 
-        # Random jitter etika scraping (1 s.d. 3 detik untuk micro-delay)
+        # Random jitter etika scraping (1 s.d. 2.5 detik)
         await asyncio.sleep(random.uniform(1.0, 2.5))
 
         proxies = {"http": self.proxy_url, "https": self.proxy_url} if self.proxy_url else None
@@ -47,13 +48,19 @@ class BaseScraper:
                     timeout=20
                 )
                 
-                # Deteksi jika ada domain redirect
+                # Deteksi jika ada domain redirect (PRD FR-06 Auto-Healing)
                 new_base_url = None
                 if response.url and not response.url.startswith(self.base_url):
                     from urllib.parse import urlparse
                     parsed = urlparse(response.url)
                     new_base_url = f"{parsed.scheme}://{parsed.netloc}"
-                    logger.info(f"[{self.site_code}] Domain redirect terdeteksi: {self.base_url} -> {new_base_url}")
+                    if new_base_url != self.base_url:
+                        logger.info(f"[{self.site_code}] Auto-healing domain redirect: {self.base_url} -> {new_base_url}")
+                        try:
+                            await Database.update_site_base_url(self.site_code, new_base_url)
+                            self.base_url = new_base_url
+                        except Exception as dbe:
+                            logger.warning(f"[{self.site_code}] Gagal persist redirect URL ke DB: {dbe}")
 
                 if response.status_code == 200:
                     return HTMLParser(response.text), new_base_url, 200
