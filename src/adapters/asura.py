@@ -1,5 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional
+from urllib.parse import quote_plus
 from src.adapters.base import BaseScraper
 from src.normalizer import parse_chapter_info
 
@@ -8,6 +9,40 @@ logger = logging.getLogger(__name__)
 class AsuraAdapter(BaseScraper):
     def __init__(self, base_url: str = "https://asurascans.com", cf_cookie: Optional[str] = None, user_agent: Optional[str] = None, proxy_url: Optional[str] = None):
         super().__init__(site_code="ASURA", base_url=base_url, cf_cookie=cf_cookie, user_agent=user_agent, proxy_url=proxy_url)
+
+    async def search_comics(self, query: str) -> List[Dict[str, Any]]:
+        """
+        Mencari komik di AsuraScans berdasarkan kata kunci judul.
+        Returns: [{'slug': str, 'title': str, 'cover_url': Optional[str]}]
+        """
+        url = f"browse/comics?q={quote_plus(query)}"
+        html, _, _ = await self.get_html(url)
+        if not html:
+            return []
+
+        results: List[Dict[str, Any]] = []
+        seen = set()
+        for a in html.css("a[href*='/comics/']"):
+            href = a.attributes.get("href", "")
+            if not href or any(x in href for x in ["browse", "bookmarks", "chapter"]):
+                continue
+            text = a.text(strip=True)
+            if not text or len(text) <= 2 or text.replace(".", "").isdigit():
+                continue
+            if href in seen:
+                continue
+            seen.add(href)
+            
+            # Cari gambar cover di dalam card jika ada
+            img = a.css_first("img")
+            img_src = img.attributes.get("src") if img else None
+            
+            results.append({
+                "slug": href,
+                "title": text,
+                "cover_url": img_src
+            })
+        return results
 
     async def get_series_detail(self, relative_slug: str) -> Dict[str, Any]:
         """

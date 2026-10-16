@@ -159,7 +159,8 @@ async def main():
             pass
 
     try:
-        await stop_event.wait()
+        while not stop_event.is_set():
+            await asyncio.sleep(1)
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:

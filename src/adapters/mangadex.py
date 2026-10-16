@@ -34,7 +34,7 @@ class MangaDexAdapter:
 
         async with aiohttp.ClientSession(headers=headers) as session:
             try:
-                async with session.get(url, params=params, proxy=proxy, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                async with session.get(url, params=params, proxy=proxy, timeout=aiohttp.ClientTimeout(total=5)) as response:
                     if response.status != 200:
                         logger.error(f"MangaDex API error {response.status}: {await response.text()}")
                         return None

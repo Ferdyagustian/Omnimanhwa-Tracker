@@ -13,3 +13,4 @@ pgdata/
 *.log
 .vscode/
 .idea/
+*.db

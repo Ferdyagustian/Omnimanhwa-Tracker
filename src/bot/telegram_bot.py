@@ -63,7 +63,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handler /add [judul atau URL]
-    Mendukung penambahan langsung via judul atau tautan langsung situs scanlator.
+    Mendukung pencarian MangaDex, auto-fallback ke AsuraScans, serta URL langsung.
     """
     if not context.args:
         await update.message.reply_text(
@@ -77,101 +77,140 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Skenario 1: Input berupa URL langsung (misal dari AsuraScans)
     if query.startswith("http"):
         parsed = urlparse(query)
-        domain = parsed.netloc.lower()
         path = parsed.path
-
         status_msg = await update.message.reply_text("🔍 Membaca detail manhwa dari URL langsung...", parse_mode="Markdown")
 
-        if "asura" in domain:
-            asura = AsuraAdapter()
-            detail = await asura.get_series_detail(path)
-            title = detail.get("title") or path.strip("/").split("/")[-1].replace("-", " ").title()
-            cover_url = detail.get("cover_url")
+        asura = AsuraAdapter()
+        detail = await asura.get_series_detail(path)
+        title = detail.get("title") or path.strip("/").split("/")[-1].replace("-", " ").title()
+        cover_url = detail.get("cover_url")
 
+        manhwa_id = await Database.insert_manhwa(
+            mangadex_uuid=None,
+            canonical_title=title,
+            cover_image_url=cover_url
+        )
+        await Database.insert_alias(
+            manhwa_id=manhwa_id,
+            alias_title=title,
+            normalized_title=normalize_title(title),
+            lang_code="en"
+        )
+        await Database.bind_source(manhwa_id=manhwa_id, site_code="ASURA", relative_slug=path)
+
+        caption = (
+            f"✅ *Target Manhwa Berhasil Ditambahkan via URL!*\n\n"
+            f"🆔 *ID*: `{manhwa_id}`\n"
+            f"📖 *Judul*: *{title}*\n"
+            f"🌐 *Sumber Terikat*: `ASURA` (`{path}`)\n\n"
+            f"_Engine akan otomatis memantau update chapter terbaru._"
+        )
+
+        img_bytes = await stream_image(cover_url, referer="https://asurascans.com") if cover_url else None
+        await status_msg.delete()
+        if img_bytes:
+            await update.message.reply_photo(photo=io.BytesIO(img_bytes), caption=caption, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(caption, parse_mode="Markdown")
+        return
+
+    # Skenario 2: Input berupa judul teks biasa
+    status_msg = await update.message.reply_text(f"🔍 Mencari '_{query}_'...", parse_mode="Markdown")
+    
+    # 2.1 Coba cari di MangaDex
+    manga_info = await MangaDexAdapter.search_manga(query)
+
+    if manga_info:
+        try:
             manhwa_id = await Database.insert_manhwa(
-                mangadex_uuid=None,
-                canonical_title=title,
-                cover_image_url=cover_url
+                mangadex_uuid=manga_info["uuid"],
+                canonical_title=manga_info["canonical_title"],
+                cover_image_url=manga_info["cover_url"]
             )
-            await Database.insert_alias(
+
+            alias_count = 0
+            for alias in manga_info["aliases"]:
+                await Database.insert_alias(
+                    manhwa_id=manhwa_id,
+                    alias_title=alias["alias_title"],
+                    normalized_title=alias["normalized_title"],
+                    lang_code=alias["lang_code"]
+                )
+                alias_count += 1
+
+            await Database.bind_source(
                 manhwa_id=manhwa_id,
-                alias_title=title,
-                normalized_title=normalize_title(title),
-                lang_code="en"
+                site_code="MANGADEX",
+                relative_slug=f"/title/{manga_info['uuid']}"
             )
-            await Database.bind_source(manhwa_id=manhwa_id, site_code="ASURA", relative_slug=path)
 
             caption = (
-                f"✅ *Target Manhwa Berhasil Ditambahkan via URL!*\n\n"
+                f"✅ *Target Manhwa Berhasil Didaftarkan!*\n\n"
                 f"🆔 *ID*: `{manhwa_id}`\n"
-                f"📖 *Judul*: *{title}*\n"
-                f"🌐 *Sumber Terikat*: `ASURA` (`{path}`)\n\n"
-                f"_Engine akan otomatis memantau update chapter terbaru._"
+                f"📖 *Judul*: *{manga_info['canonical_title']}*\n"
+                f"🏷️ *Alias Tersimpan*: `{alias_count}` variasi nama\n"
+                f"🌐 *Sumber Terikat*: `MANGADEX`\n\n"
+                f"_Gunakan `/bind {manhwa_id} ASURA [slug/url]` untuk menautkan sumber scanlator lain._"
             )
 
-            img_bytes = await stream_image(cover_url, referer="https://asurascans.com") if cover_url else None
+            img_bytes = await stream_image(manga_info["cover_url"], referer="https://mangadex.org")
             await status_msg.delete()
             if img_bytes:
                 await update.message.reply_photo(photo=io.BytesIO(img_bytes), caption=caption, parse_mode="Markdown")
             else:
                 await update.message.reply_text(caption, parse_mode="Markdown")
             return
+        except Exception as e:
+            logger.error(f"Gagal menyimpan data MangaDex: {e}")
 
-    # Skenario 2: Input berupa judul teks biasa (Cari di MangaDex)
-    status_msg = await update.message.reply_text(f"🔍 Mencari '_{query}_' di MangaDex...", parse_mode="Markdown")
-    manga_info = await MangaDexAdapter.search_manga(query)
+    # 2.2 Fallback: Jika MangaDex gagal atau tidak ditemukan, cari di AsuraScans langsung!
+    logger.info(f"Mencoba mencari '{query}' di AsuraScans sebagai fallback...")
+    asura = AsuraAdapter()
+    asura_results = await asura.search_comics(query)
 
-    if not manga_info:
-        await status_msg.edit_text(
-            f"❌ Manhwa '_{query}_' tidak ditemukan di MangaDex.\n"
-            f"💡 Tips: Anda juga bisa menambahkan via URL langsung, contoh:\n`/add https://asurascans.com/comics/...`",
-            parse_mode="Markdown"
-        )
-        return
+    if asura_results:
+        best_match = asura_results[0]
+        slug = best_match["slug"]
+        title = best_match["title"]
+        
+        detail = await asura.get_series_detail(slug)
+        cover_url = detail.get("cover_url") or best_match.get("cover_url")
 
-    try:
         manhwa_id = await Database.insert_manhwa(
-            mangadex_uuid=manga_info["uuid"],
-            canonical_title=manga_info["canonical_title"],
-            cover_image_url=manga_info["cover_url"]
+            mangadex_uuid=None,
+            canonical_title=title,
+            cover_image_url=cover_url
         )
-
-        alias_count = 0
-        for alias in manga_info["aliases"]:
-            await Database.insert_alias(
-                manhwa_id=manhwa_id,
-                alias_title=alias["alias_title"],
-                normalized_title=alias["normalized_title"],
-                lang_code=alias["lang_code"]
-            )
-            alias_count += 1
-
-        # Otomatis bind sumber MANGADEX
-        await Database.bind_source(
+        await Database.insert_alias(
             manhwa_id=manhwa_id,
-            site_code="MANGADEX",
-            relative_slug=f"/title/{manga_info['uuid']}"
+            alias_title=title,
+            normalized_title=normalize_title(title),
+            lang_code="en"
         )
+        await Database.bind_source(manhwa_id=manhwa_id, site_code="ASURA", relative_slug=slug)
 
         caption = (
-            f"✅ *Target Manhwa Berhasil Didaftarkan!*\n\n"
+            f"✅ *Target Manhwa Ditemukan di AsuraScans!*\n\n"
             f"🆔 *ID*: `{manhwa_id}`\n"
-            f"📖 *Judul*: *{manga_info['canonical_title']}*\n"
-            f"🏷️ *Alias Tersimpan*: `{alias_count}` variasi nama\n"
-            f"🌐 *Sumber Terikat*: `MANGADEX`\n\n"
-            f"_Gunakan `/bind {manhwa_id} ASURA [slug/url]` untuk menautkan sumber situs scanlator lain._"
+            f"📖 *Judul*: *{title}*\n"
+            f"🌐 *Sumber Terikat*: `ASURA` (`{slug}`)\n\n"
+            f"_Engine akan otomatis memantau update chapter terbaru._"
         )
 
-        img_bytes = await stream_image(manga_info["cover_url"], referer="https://mangadex.org")
+        img_bytes = await stream_image(cover_url, referer="https://asurascans.com") if cover_url else None
         await status_msg.delete()
         if img_bytes:
             await update.message.reply_photo(photo=io.BytesIO(img_bytes), caption=caption, parse_mode="Markdown")
         else:
             await update.message.reply_text(caption, parse_mode="Markdown")
+        return
 
-    except Exception as e:
-        logger.error(f"Gagal menyimpan manhwa ke DB: {e}")
-        await status_msg.edit_text(f"❌ Terjadi kesalahan saat menyimpan ke database: {e}")
+    await status_msg.edit_text(
+        f"❌ Manhwa '_{query}_' tidak ditemukan di MangaDex maupun AsuraScans.\n\n"
+        f"💡 Tips: Anda dapat menambahkan target menggunakan URL langsung, contoh:\n"
+        f"`/add https://asurascans.com/comics/...`",
+        parse_mode="Markdown"
+    )
 
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -182,8 +221,8 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         manhwas = await Database.get_tracked_manhwas_with_sources()
         if not manhwas:
             await update.message.reply_text(
-                "📭 *Daftar target pantauan masih kosong.*\n"
-                "Gunakan `/add [judul atau URL]` untuk menambahkan manhwa baru.",
+                "📭 *Daftar target pantauan masih kosong.*\n\n"
+                "Gunakan `/add [judul atau URL]` untuk menambahkan manhwa baru ke daftar pantauan.",
                 parse_mode="Markdown"
             )
             return
@@ -209,7 +248,7 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
     except Exception as e:
-        logger.error(f"Error pada /list: {e}")
+        logger.error(f"Error pada /list: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Gagal mengambil daftar target: {e}")
 
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -249,7 +288,7 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
     except Exception as e:
-        logger.error(f"Error pada /delete: {e}")
+        logger.error(f"Error pada /delete: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Terjadi kesalahan saat menghapus manhwa: {e}")
 
 async def bind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -299,7 +338,7 @@ async def bind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
     except Exception as e:
-        logger.error(f"Error pada /bind: {e}")
+        logger.error(f"Error pada /bind: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Gagal menautkan sumber: {e}")
 
 async def domain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -334,7 +373,7 @@ async def domain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
     except Exception as e:
-        logger.error(f"Error pada /domain: {e}")
+        logger.error(f"Error pada /domain: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Gagal memperbarui domain: {e}")
 
 async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -349,12 +388,13 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ram_text = "RAM: (psutil belum terpasang)"
         swap_text = "Swap: (psutil belum terpasang)"
 
+    engine_name = getattr(Database, "_engine", "postgres").upper()
     msg = (
         "🩺 *OMTE Health Status*\n\n"
         f"• *Memory*: `{ram_text}`\n"
         f"• *Swap Memory*: `{swap_text}`\n"
         f"• *Status Engine*: `ACTIVE 24/7`\n"
-        f"• *Database*: `Connected (PostgreSQL)`\n"
+        f"• *Database*: `Connected ({engine_name})`\n"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
