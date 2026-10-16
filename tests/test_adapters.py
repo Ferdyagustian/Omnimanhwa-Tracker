@@ -45,14 +45,18 @@ class TestAdaptersParsing(unittest.TestCase):
         adapter = VortexAdapter(base_url="https://vortexscans.org")
         mock_html = """
         <div class="chapter-list">
-            <a href="https://vortexscans.org/series/nano-machine/chapter-150">Chapter 150</a>
-            <a href="https://vortexscans.org/series/nano-machine/chapter-149">Chapter 149</a>
+            <a href="https://vortexscans.org/series/the-saint/chapter-43_01">Chapter 43 New</a>
+            <a href="https://vortexscans.org/series/the-saint/chapter-42">Chapter 42</a>
         </div>
         """
         with patch.object(adapter, "get_html", return_value=(HTMLParser(mock_html), None, 200)):
-            chapters = asyncio.run(adapter.get_latest_chapters("/series/nano-machine"))
+            # Uji juga normalisasi jika input berupa url chapter
+            chapters = asyncio.run(adapter.get_latest_chapters("/series/the-saint/chapter-43_01"))
             self.assertEqual(len(chapters), 2)
-            self.assertEqual(chapters[0]["chapter_num"], 150.0)
+            self.assertEqual(chapters[0]["chapter_num"], 43.0)
+            self.assertEqual(chapters[1]["chapter_num"], 42.0)
+            self.assertEqual(chapters[0]["chapter_url"], "https://vortexscans.org/series/the-saint/chapter-43_01")
+            self.assertEqual(chapters[1]["chapter_url"], "https://vortexscans.org/series/the-saint/chapter-42")
 
     def test_mgeko_parsing(self):
         adapter = MgekoAdapter(base_url="https://www.mgeko.cc")
@@ -104,14 +108,15 @@ class TestAdaptersParsing(unittest.TestCase):
         adapter = VortexAdapter(base_url="https://vortexscans.org")
         mock_html = """
         <div class="series-list">
-            <a href="/series/solo-leveling">Solo Leveling</a>
+            <a href="/series/the-saint" title="The Saint Levels Up Through Necromancy">Manhwa</a>
+            <a href="/series/the-saint" title="The Saint Levels Up Through Necromancy">The Saint Levels Up Through Necromancy</a>
         </div>
         """
         with patch.object(adapter, "get_html", return_value=(HTMLParser(mock_html), None, 200)):
-            results = asyncio.run(adapter.search_comics("Solo Leveling"))
+            results = asyncio.run(adapter.search_comics("The Saint Levels Up"))
             self.assertEqual(len(results), 1)
-            self.assertEqual(results[0]["slug"], "/series/solo-leveling")
-            self.assertEqual(results[0]["title"], "Solo Leveling")
+            self.assertEqual(results[0]["slug"], "/series/the-saint")
+            self.assertEqual(results[0]["title"], "The Saint Levels Up Through Necromancy")
 
     def test_asura_search(self):
         adapter = AsuraAdapter(base_url="https://asurascans.com")

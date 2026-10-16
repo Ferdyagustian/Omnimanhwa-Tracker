@@ -79,12 +79,27 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Skenario 1: Input berupa URL langsung (misal dari AsuraScans)
     if query.startswith("http"):
         parsed = urlparse(query)
+        netloc = parsed.netloc.lower()
         path = parsed.path
         status_msg = await update.message.reply_text("🔍 Membaca detail manhwa dari URL langsung...", parse_mode="Markdown")
 
+        # Tentukan website berdasarkan domain URL
+        site_code = "ASURA"
+        if "vortexscans" in netloc:
+            site_code = "VORTEX"
+        elif "mgeko" in netloc:
+            site_code = "MGEKO"
+        elif "komiku" in netloc:
+            site_code = "KOMIKU"
+        elif "mangadex" in netloc:
+            site_code = "MANGADEX"
+
+        # Normalisasi: jika URL mengarah ke chapter individual, potong menjadi URL serial
+        series_path = path.split("/chapter")[0] if "/chapter" in path else path
+
         asura = AsuraAdapter()
-        detail = await asura.get_series_detail(path)
-        title = detail.get("title") or path.strip("/").split("/")[-1].replace("-", " ").title()
+        detail = await asura.get_series_detail(series_path) if site_code == "ASURA" else {}
+        title = detail.get("title") or series_path.strip("/").split("/")[-1].replace("-", " ").title()
         cover_url = detail.get("cover_url")
 
         manhwa_id = await Database.insert_manhwa(
@@ -98,13 +113,34 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             normalized_title=normalize_title(title),
             lang_code="en"
         )
-        await Database.bind_source(manhwa_id=manhwa_id, site_code="ASURA", relative_slug=path)
+        await Database.bind_source(manhwa_id=manhwa_id, site_code=site_code, relative_slug=series_path)
+
+        # Seeding awal chapter dari sumber URL ini secara senyap
+        adapter_cls = ADAPTER_CLASSES.get(site_code)
+        if adapter_cls:
+            try:
+                ad = adapter_cls()
+                init_chs = await ad.get_latest_chapters(series_path)
+                if init_chs:
+                    lang = "ID" if site_code == "KOMIKU" else "EN"
+                    for ch in init_chs[:5]:
+                        await Database.record_chapter_log(
+                            manhwa_id=manhwa_id,
+                            site_code=site_code,
+                            language=lang,
+                            chapter_num=ch["chapter_num"],
+                            chapter_raw_title=ch.get("chapter_raw_title", f"Chapter {ch['chapter_num']}"),
+                            chapter_url=ch["chapter_url"],
+                            is_special=ch.get("is_special", False)
+                        )
+            except Exception as se:
+                logger.warning(f"Gagal seeding awal URL {site_code}: {se}")
 
         caption = (
             f"✅ *Target Manhwa Berhasil Ditambahkan via URL!*\n\n"
             f"🆔 *ID*: `{manhwa_id}`\n"
             f"📖 *Judul*: *{title}*\n"
-            f"🌐 *Sumber Terikat*: `ASURA` (`{path}`)\n\n"
+            f"🌐 *Sumber Terikat*: `{site_code}` (`{series_path}`)\n\n"
             f"_Engine akan otomatis memantau update chapter terbaru._"
         )
 
@@ -192,7 +228,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     canonical_title=canonical_title,
                     known_aliases=known_aliases
                 )
-                if is_match or score >= 75.0:
+                if is_match:
                     return (site_code, r["slug"], r.get("cover_url"))
         except Exception as e:
             logger.warning(f"Gagal mencari di {site_code}: {e}")
@@ -218,6 +254,39 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         return
+
+    # Seeding awal status chapter secara senyap agar bot tidak spam notifikasi chapter lama
+    for s_code in bound_sites:
+        cfg = site_map.get(s_code, {})
+        adapter_cls = ADAPTER_CLASSES.get(s_code)
+        if not adapter_cls:
+            continue
+        try:
+            sources = await Database.get_manhwa_sources(manhwa_id)
+            source_map = {s["site_code"]: s["relative_slug"] for s in sources}
+            s_slug = source_map.get(s_code)
+            if s_slug:
+                ad = adapter_cls(
+                    base_url=cfg.get("base_url", ""),
+                    cf_cookie=cfg.get("cf_clearance_cookie"),
+                    user_agent=cfg.get("cf_user_agent"),
+                    proxy_url=cfg.get("proxy_url")
+                )
+                init_chs = await ad.get_latest_chapters(s_slug)
+                if init_chs:
+                    lang = "ID" if s_code == "KOMIKU" else "EN"
+                    for ch in init_chs[:5]:
+                        await Database.record_chapter_log(
+                            manhwa_id=manhwa_id,
+                            site_code=s_code,
+                            language=lang,
+                            chapter_num=ch["chapter_num"],
+                            chapter_raw_title=ch.get("chapter_raw_title", f"Chapter {ch['chapter_num']}"),
+                            chapter_url=ch["chapter_url"],
+                            is_special=ch.get("is_special", False)
+                        )
+        except Exception as se:
+            logger.warning(f"Gagal seeding awal untuk {s_code}: {se}")
 
     # Urutkan sumber yang terikat sesuai SITE_PRIORITY
     bound_sites.sort(key=lambda s: SITE_PRIORITY.get(s, 99))

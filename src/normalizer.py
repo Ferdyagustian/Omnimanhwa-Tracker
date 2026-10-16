@@ -49,8 +49,12 @@ def parse_chapter_info(title_or_text: str) -> Tuple[Optional[float], bool, str]:
     # 1. Pola dash-decimal pada URL slug, misal: chapter-199-5 atau ch-89-5
     dash_decimal = re.search(r"(?:chapter|ch\.?|ep\.?|episode)[-_/](\d+)[-_](\d+)", text, re.IGNORECASE)
     if dash_decimal:
+        sub = dash_decimal.group(2)
+        # Jika sub-angka diawali '0' (misal _01, _02), ini adalah revisi/part file scanlator (cth chapter-43_01 = 43)
+        if sub.startswith("0") or sub == "0":
+            return float(dash_decimal.group(1)), is_special, text
         try:
-            return float(f"{dash_decimal.group(1)}.{dash_decimal.group(2)}"), is_special, text
+            return float(f"{dash_decimal.group(1)}.{sub}"), is_special, text
         except ValueError:
             pass
 

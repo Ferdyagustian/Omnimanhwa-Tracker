@@ -15,7 +15,7 @@ class VortexAdapter(BaseScraper):
         Mencari komik di VortexScans berdasarkan kata kunci judul.
         Returns: [{'slug': str, 'title': str, 'cover_url': Optional[str]}]
         """
-        url = f"series?search={quote_plus(query)}"
+        url = f"series/?searchTerm={quote_plus(query)}"
         html, _, _ = await self.get_html(url)
         if not html:
             return []
@@ -26,8 +26,14 @@ class VortexAdapter(BaseScraper):
             href = a.attributes.get("href", "")
             if not href or any(x in href for x in ["/chapter", "/reader"]):
                 continue
-            text = a.text(strip=True) or a.attributes.get("title", "").strip()
-            if not text or len(text) <= 2 or text.replace(".", "").isdigit():
+            raw_text = a.text(strip=True)
+            title_attr = a.attributes.get("title", "").strip()
+            if raw_text.lower() in ["manhwa", "manhua", "manga", "comic"]:
+                title = title_attr
+            else:
+                title = raw_text or title_attr
+
+            if not title or len(title) <= 2 or title.replace(".", "").isdigit():
                 continue
             path = urlparse(href).path if href.startswith("http") else href
             clean_slug = path if path.startswith("/") else f"/{path}"
@@ -40,24 +46,33 @@ class VortexAdapter(BaseScraper):
 
             results.append({
                 "slug": clean_slug,
-                "title": text,
+                "title": title,
                 "cover_url": img_src
             })
         return results
 
     async def get_latest_chapters(self, relative_slug: str) -> List[Dict[str, Any]]:
+        # Jika slug mengarah ke chapter individual, normalisasi ke path series
+        if "/chapter" in relative_slug:
+            relative_slug = relative_slug.split("/chapter")[0]
+
         html, new_base_url, status = await self.get_html(relative_slug)
         if not html:
             return []
 
         chapters: List[Dict[str, Any]] = []
         seen_urls = set()
+        clean_series_slug = relative_slug.strip("/")
         links = html.css("a[href*='chapter']")
         
         for a in links:
             href = a.attributes.get("href", "")
-            title_text = a.text(strip=True)
+            title_text = " ".join((a.text(separator=" ") or "").split())
             if not href or not title_text:
+                continue
+
+            # Pastikan link chapter benar-benar milik series ini
+            if clean_series_slug and clean_series_slug not in href:
                 continue
 
             full_url = href if href.startswith("http") else f"{self.base_url}/{href.lstrip('/')}"
