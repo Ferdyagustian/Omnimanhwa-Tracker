@@ -16,3 +16,4 @@ pgdata/
 *.db
 .pytest_cache/
 .DS_Store
+scratch/
