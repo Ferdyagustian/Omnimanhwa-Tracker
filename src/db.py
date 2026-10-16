@@ -85,6 +85,8 @@ class Database:
             notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(manhwa_id, site_code, chapter_url)
         );
+
+        CREATE INDEX IF NOT EXISTS idx_chapter_logs_notified ON chapter_logs(notified_at);
         """)
         conn.commit()
         conn.close()
@@ -195,11 +197,16 @@ class Database:
                     cur.execute("SELECT id FROM manhwas WHERE mangadex_uuid = ?", (uuid_str,))
                     manhwa_id = cur.fetchone()[0]
             else:
-                cur.execute(
-                    "INSERT INTO manhwas (canonical_title, cover_image_url) VALUES (?, ?)",
-                    (canonical_title, cover_image_url)
-                )
-                manhwa_id = cur.lastrowid
+                cur.execute("SELECT id FROM manhwas WHERE canonical_title = ?", (canonical_title,))
+                existing = cur.fetchone()
+                if existing:
+                    manhwa_id = existing[0]
+                else:
+                    cur.execute(
+                        "INSERT INTO manhwas (canonical_title, cover_image_url) VALUES (?, ?)",
+                        (canonical_title, cover_image_url)
+                    )
+                    manhwa_id = cur.lastrowid
             conn.commit()
             conn.close()
             return manhwa_id
@@ -223,6 +230,10 @@ class Database:
                             uuid_obj, canonical_title, cover_image_url
                         )
                         return row["id"]
+
+                existing = await conn.fetchrow("SELECT id FROM manhwas WHERE canonical_title = $1", canonical_title)
+                if existing:
+                    return existing["id"]
 
                 row = await conn.fetchrow(
                     "INSERT INTO manhwas (canonical_title, cover_image_url) VALUES ($1, $2) RETURNING id",
@@ -396,12 +407,51 @@ class Database:
                 )
 
     @classmethod
-    async def record_chapter_log(cls, manhwa_id: int, site_code: str, language: str, chapter_num: float, chapter_raw_title: str, chapter_url: str) -> bool:
+    async def record_chapter_log(cls, manhwa_id: int, site_code: str, language: str, chapter_num: float, chapter_raw_title: str, chapter_url: str, is_special: bool = False) -> bool:
         await cls.get_pool()
+        lang_upper = language.upper()
         if cls._engine == "sqlite":
             conn = sqlite3.connect(SQLITE_DB_PATH)
             cur = conn.cursor()
             try:
+                # 1. Selalu perbarui status chapter sumber di tabel manhwa_sources
+                cur.execute(
+                    """
+                    UPDATE manhwa_sources 
+                    SET last_chapter_num = MAX(last_chapter_num, ?), last_chapter_url = ?, last_checked_at = CURRENT_TIMESTAMP
+                    WHERE manhwa_id = ? AND site_code = ?
+                    """,
+                    (chapter_num, chapter_url, manhwa_id, site_code)
+                )
+
+                # 2. Cek apakah chapter ini untuk bahasa ini sudah pernah dikirimkan notifikasi oleh situs mana pun
+                cur.execute(
+                    "SELECT 1 FROM chapter_logs WHERE manhwa_id = ? AND UPPER(language) = ? AND chapter_num = ? LIMIT 1",
+                    (manhwa_id, lang_upper, chapter_num)
+                )
+                if cur.fetchone():
+                    conn.commit()
+                    conn.close()
+                    return False
+
+                # 3. Ambil latest_chapter untuk bahasa ini
+                cur.execute("SELECT latest_chapter_en, latest_chapter_id FROM manhwas WHERE id = ?", (manhwa_id,))
+                m_row = cur.fetchone()
+                latest_en = float(m_row[0]) if m_row and m_row[0] is not None else 0.0
+                latest_id = float(m_row[1]) if m_row and m_row[1] is not None else 0.0
+
+                # 4. Filter chapter kadaluwarsa: jika chapter_num lebih kecil dari rilis terbaru yang sudah ada
+                if not is_special:
+                    if lang_upper == "EN" and latest_en > 0 and chapter_num < latest_en:
+                        conn.commit()
+                        conn.close()
+                        return False
+                    elif lang_upper == "ID" and latest_id > 0 and chapter_num < latest_id:
+                        conn.commit()
+                        conn.close()
+                        return False
+
+                # 5. Rekam ke chapter_logs sebagai riwayat notifikasi rilis
                 cur.execute(
                     """
                     INSERT INTO chapter_logs (manhwa_id, site_code, language, chapter_num, chapter_raw_title, chapter_url)
@@ -409,12 +459,14 @@ class Database:
                     """,
                     (manhwa_id, site_code, language, chapter_num, chapter_raw_title, chapter_url)
                 )
-                if language.upper() == "EN":
+
+                # 6. Perbarui latest_chapter di tabel manhwas
+                if lang_upper == "EN":
                     cur.execute(
                         "UPDATE manhwas SET latest_chapter_en = MAX(latest_chapter_en, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                         (chapter_num, manhwa_id)
                     )
-                elif language.upper() == "ID":
+                elif lang_upper == "ID":
                     cur.execute(
                         "UPDATE manhwas SET latest_chapter_id = MAX(latest_chapter_id, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                         (chapter_num, manhwa_id)
@@ -425,9 +477,42 @@ class Database:
             except sqlite3.IntegrityError:
                 conn.close()
                 return False
+            except Exception:
+                conn.close()
+                return False
         else:
             async with cls._pool.acquire() as conn:
                 try:
+                    # 1. Selalu perbarui status chapter sumber di tabel manhwa_sources
+                    await conn.execute(
+                        """
+                        UPDATE manhwa_sources 
+                        SET last_chapter_num = GREATEST(last_chapter_num, $1), last_chapter_url = $2, last_checked_at = NOW()
+                        WHERE manhwa_id = $3 AND site_code = $4
+                        """,
+                        chapter_num, chapter_url, manhwa_id, site_code
+                    )
+
+                    # 2. Cek apakah chapter ini sudah pernah dinotifikasikan oleh situs mana pun
+                    already_notified = await conn.fetchval(
+                        "SELECT 1 FROM chapter_logs WHERE manhwa_id = $1 AND UPPER(language) = $2 AND chapter_num = $3 LIMIT 1",
+                        manhwa_id, lang_upper, chapter_num
+                    )
+                    if already_notified:
+                        return False
+
+                    # 3. Ambil latest_chapter untuk filter chapter lama
+                    m_row = await conn.fetchrow("SELECT latest_chapter_en, latest_chapter_id FROM manhwas WHERE id = $1", manhwa_id)
+                    latest_en = float(m_row["latest_chapter_en"]) if m_row and m_row["latest_chapter_en"] is not None else 0.0
+                    latest_id = float(m_row["latest_chapter_id"]) if m_row and m_row["latest_chapter_id"] is not None else 0.0
+
+                    if not is_special:
+                        if lang_upper == "EN" and latest_en > 0 and chapter_num < latest_en:
+                            return False
+                        elif lang_upper == "ID" and latest_id > 0 and chapter_num < latest_id:
+                            return False
+
+                    # 4. Rekam ke chapter_logs
                     await conn.execute(
                         """
                         INSERT INTO chapter_logs (manhwa_id, site_code, language, chapter_num, chapter_raw_title, chapter_url)
@@ -435,12 +520,14 @@ class Database:
                         """,
                         manhwa_id, site_code, language, chapter_num, chapter_raw_title, chapter_url
                     )
-                    if language.upper() == "EN":
+
+                    # 5. Perbarui latest_chapter di manhwas
+                    if lang_upper == "EN":
                         await conn.execute(
                             "UPDATE manhwas SET latest_chapter_en = GREATEST(latest_chapter_en, $1), updated_at = NOW() WHERE id = $2",
                             chapter_num, manhwa_id
                         )
-                    elif language.upper() == "ID":
+                    elif lang_upper == "ID":
                         await conn.execute(
                             "UPDATE manhwas SET latest_chapter_id = GREATEST(latest_chapter_id, $1), updated_at = NOW() WHERE id = $2",
                             chapter_num, manhwa_id
@@ -448,3 +535,31 @@ class Database:
                     return True
                 except Exception:
                     return False
+
+    @classmethod
+    async def cleanup_old_chapter_logs(cls, days: int = 30) -> int:
+        """
+        Retensi Data: Menghapus riwayat log notifikasi chapter_logs yang usianya lebih dari `days` hari
+        untuk mencegah pembengkakan disk database di lingkungan VM 1 GB.
+        """
+        await cls.get_pool()
+        if cls._engine == "sqlite":
+            conn = sqlite3.connect(SQLITE_DB_PATH)
+            cur = conn.cursor()
+            cur.execute("DELETE FROM chapter_logs WHERE notified_at < datetime('now', ?)", (f"-{days} days",))
+            deleted = cur.rowcount
+            conn.commit()
+            conn.close()
+            return deleted
+        else:
+            async with cls._pool.acquire() as conn:
+                res = await conn.execute(
+                    "DELETE FROM chapter_logs WHERE notified_at < NOW() - make_interval(days => $1)",
+                    days
+                )
+                # Format string output asyncpg: "DELETE <count>"
+                try:
+                    return int(res.split(" ")[-1])
+                except Exception:
+                    return 0
+

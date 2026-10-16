@@ -6,35 +6,13 @@ from typing import Dict, Any
 from src.config import Config
 from src.db import Database
 from src.bot.telegram_bot import setup_telegram_bot, send_release_notification
-from src.adapters.mangadex import MangaDexAdapter
-from src.adapters.asura import AsuraAdapter
-from src.adapters.komiku import KomikuAdapter
-from src.adapters.vortex import VortexAdapter
-from src.adapters.mgeko import MgekoAdapter
+from src.adapters import ADAPTER_CLASSES, SITE_PRIORITY
 
 logging.basicConfig(
     level=getattr(logging, Config.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger("OMTE_CORE")
-
-# Urutan prioritas scraping sesuai permintaan user:
-# 1. Mgeko -> 2. MangaDex -> 3. VortexScans -> 4. AsuraScans -> 5. Komiku
-SITE_PRIORITY = {
-    "MGEKO": 1,
-    "MANGADEX": 2,
-    "VORTEX": 3,
-    "ASURA": 4,
-    "KOMIKU": 5,
-}
-
-ADAPTER_CLASSES = {
-    "MGEKO": MgekoAdapter,
-    "MANGADEX": MangaDexAdapter,
-    "VORTEX": VortexAdapter,
-    "ASURA": AsuraAdapter,
-    "KOMIKU": KomikuAdapter,
-}
 
 async def poll_single_source(bot, manhwa: Dict[str, Any], source: Dict[str, Any], site_cfg: Dict[str, Any]):
     """
@@ -70,6 +48,7 @@ async def poll_single_source(bot, manhwa: Dict[str, Any], source: Dict[str, Any]
         raw_title = ch.get("chapter_raw_title", f"Chapter {ch_num}")
         ch_url = ch["chapter_url"]
         lang = ch.get("language") or default_lang
+        is_special = ch.get("is_special", False)
 
         # Rekam ke database & cek apakah ini chapter baru (deduplikasi mutlak)
         is_new = await Database.record_chapter_log(
@@ -78,7 +57,8 @@ async def poll_single_source(bot, manhwa: Dict[str, Any], source: Dict[str, Any]
             language=lang,
             chapter_num=ch_num,
             chapter_raw_title=raw_title,
-            chapter_url=ch_url
+            chapter_url=ch_url,
+            is_special=is_special
         )
 
         if is_new and Config.TELEGRAM_ADMIN_CHAT_ID:
@@ -119,9 +99,17 @@ async def tracker_worker_loop(bot):
                         # Jitter antar request
                         await asyncio.sleep(random.uniform(1.5, 3.5))
 
-            # Jeda siklus polling berkala (default 15 menit) + jitter
+            # Retensi Data berkala: bersihkan log notifikasi > 30 hari
+            try:
+                cleaned_count = await Database.cleanup_old_chapter_logs(days=30)
+                if cleaned_count > 0:
+                    logger.info(f"Retensi Data: Membersihkan {cleaned_count} log riwayat rilis lama (> 30 hari).")
+            except Exception as ce:
+                logger.warning(f"Gagal menjalankan retensi log: {ce}")
+
+            # Jeda siklus polling berkala (default 20 menit) + Random Jitter (10 s.d. 35 detik)
             base_delay = Config.POLL_INTERVAL_MINUTES * 60
-            jitter = random.uniform(10, 30)
+            jitter = random.uniform(10.0, 35.0)
             sleep_time = base_delay + jitter
             logger.info(f"Siklus selesai. Menunggu {int(sleep_time)} detik sebelum pengecekan berikutnya...")
             await asyncio.sleep(sleep_time)

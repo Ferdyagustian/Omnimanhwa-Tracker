@@ -74,3 +74,4 @@ CREATE TABLE IF NOT EXISTS chapter_logs (
     notified_at TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT uq_chapter_notification UNIQUE(manhwa_id, site_code, chapter_url)
 );
+CREATE INDEX IF NOT EXISTS idx_chapter_logs_notified ON chapter_logs(notified_at);

@@ -8,12 +8,20 @@ from src.db import Database
 
 logger = logging.getLogger(__name__)
 
+CHROME_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+]
+
 class BaseScraper:
     def __init__(self, site_code: str, base_url: str, cf_cookie: Optional[str] = None, user_agent: Optional[str] = None, proxy_url: Optional[str] = None):
         self.site_code = site_code
         self.base_url = base_url.rstrip("/")
         self.cf_cookie = cf_cookie
-        self.user_agent = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        self.user_agent = user_agent
         self.proxy_url = proxy_url
 
     async def get_html(self, path_or_url: str) -> Tuple[Optional[HTMLParser], Optional[str], int]:
@@ -23,8 +31,10 @@ class BaseScraper:
         """
         url = path_or_url if path_or_url.startswith("http") else f"{self.base_url}/{path_or_url.lstrip('/')}"
         
+        # Rotasi User-Agent dinamis jika tidak ada UA khusus Cloudflare
+        ua = self.user_agent or random.choice(CHROME_USER_AGENTS)
         headers = {
-            "User-Agent": self.user_agent,
+            "User-Agent": ua,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
         }

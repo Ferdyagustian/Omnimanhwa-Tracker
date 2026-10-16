@@ -68,5 +68,63 @@ class TestAdaptersParsing(unittest.TestCase):
             self.assertEqual(chapters[0]["chapter_num"], 110.0)
             self.assertEqual(chapters[0]["chapter_url"], "https://www.mgeko.cc/reader/en/solo-leveling-chapter-110-eng-li/")
 
+    def test_mgeko_search(self):
+        adapter = MgekoAdapter(base_url="https://www.mgeko.cc")
+        mock_html = """
+        <div class="comic-list">
+            <a href="/jumbo/manga/solo-leveling" title="Solo Leveling">
+                <img src="https://www.mgeko.cc/cover.jpg" />
+                Solo Leveling
+            </a>
+        </div>
+        """
+        with patch.object(adapter, "get_html", return_value=(HTMLParser(mock_html), None, 200)):
+            results = asyncio.run(adapter.search_comics("Solo Leveling"))
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["slug"], "/jumbo/manga/solo-leveling")
+            self.assertEqual(results[0]["title"], "Solo Leveling")
+            self.assertEqual(results[0]["cover_url"], "https://www.mgeko.cc/cover.jpg")
+
+    def test_komiku_search(self):
+        adapter = KomikuAdapter(base_url="https://komiku.org")
+        mock_html = """
+        <div class="bge">
+            <a href="/manga/solo-leveling/">
+                <h4>Solo Leveling</h4>
+            </a>
+        </div>
+        """
+        with patch.object(adapter, "get_html", return_value=(HTMLParser(mock_html), None, 200)):
+            results = asyncio.run(adapter.search_comics("Solo Leveling"))
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["slug"], "/manga/solo-leveling/")
+            self.assertEqual(results[0]["title"], "Solo Leveling")
+
+    def test_vortex_search(self):
+        adapter = VortexAdapter(base_url="https://vortexscans.org")
+        mock_html = """
+        <div class="series-list">
+            <a href="/series/solo-leveling">Solo Leveling</a>
+        </div>
+        """
+        with patch.object(adapter, "get_html", return_value=(HTMLParser(mock_html), None, 200)):
+            results = asyncio.run(adapter.search_comics("Solo Leveling"))
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["slug"], "/series/solo-leveling")
+            self.assertEqual(results[0]["title"], "Solo Leveling")
+
+    def test_asura_search(self):
+        adapter = AsuraAdapter(base_url="https://asurascans.com")
+        mock_html = """
+        <div class="grid">
+            <a href="https://asurascans.com/comics/solo-leveling-1234">Solo Leveling</a>
+        </div>
+        """
+        with patch.object(adapter, "get_html", return_value=(HTMLParser(mock_html), None, 200)):
+            results = asyncio.run(adapter.search_comics("Solo Leveling"))
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["slug"], "/comics/solo-leveling-1234")
+            self.assertEqual(results[0]["title"], "Solo Leveling")
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional
+from urllib.parse import quote_plus, urlparse
 from src.adapters.base import BaseScraper
 from src.normalizer import parse_chapter_info
 
@@ -8,6 +9,41 @@ logger = logging.getLogger(__name__)
 class KomikuAdapter(BaseScraper):
     def __init__(self, base_url: str = "https://komiku.org", cf_cookie: Optional[str] = None, user_agent: Optional[str] = None, proxy_url: Optional[str] = None):
         super().__init__(site_code="KOMIKU", base_url=base_url, cf_cookie=cf_cookie, user_agent=user_agent, proxy_url=proxy_url)
+
+    async def search_comics(self, query: str) -> List[Dict[str, Any]]:
+        """
+        Mencari komik di Komiku berdasarkan kata kunci judul.
+        Returns: [{'slug': str, 'title': str, 'cover_url': Optional[str]}]
+        """
+        url = f"?s={quote_plus(query)}"
+        html, _, _ = await self.get_html(url)
+        if not html:
+            return []
+
+        results: List[Dict[str, Any]] = []
+        seen = set()
+        for a in html.css(".bge a, .daftar a, a[href*='/manga/']"):
+            href = a.attributes.get("href", "")
+            if not href or "/manga/" not in href or any(x in href for x in ["/ch/", "/chapter", "genre", "category", "tag"]):
+                continue
+            text = a.text(strip=True) or a.attributes.get("title", "").strip()
+            if not text or len(text) <= 2 or text.replace(".", "").isdigit():
+                continue
+            path = urlparse(href).path if href.startswith("http") else href
+            clean_slug = path if path.startswith("/") else f"/{path}"
+            if clean_slug in seen:
+                continue
+            seen.add(clean_slug)
+
+            img = a.css_first("img")
+            img_src = img.attributes.get("src") if img else None
+
+            results.append({
+                "slug": clean_slug,
+                "title": text,
+                "cover_url": img_src
+            })
+        return results
 
     async def get_latest_chapters(self, relative_slug: str) -> List[Dict[str, Any]]:
         """

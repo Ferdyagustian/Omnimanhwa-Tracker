@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 from src.adapters.base import BaseScraper
 from src.normalizer import parse_chapter_info
 
@@ -29,16 +29,18 @@ class AsuraAdapter(BaseScraper):
             text = a.text(strip=True)
             if not text or len(text) <= 2 or text.replace(".", "").isdigit():
                 continue
-            if href in seen:
+            path = urlparse(href).path if href.startswith("http") else href
+            clean_slug = path if path.startswith("/") else f"/{path}"
+            if clean_slug in seen:
                 continue
-            seen.add(href)
+            seen.add(clean_slug)
             
             # Cari gambar cover di dalam card jika ada
             img = a.css_first("img")
             img_src = img.attributes.get("src") if img else None
             
             results.append({
-                "slug": href,
+                "slug": clean_slug,
                 "title": text,
                 "cover_url": img_src
             })

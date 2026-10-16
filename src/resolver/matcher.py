@@ -64,18 +64,3 @@ class EntityMatcher:
             synopsis=synopsis
         )
         return ai_match, best_score, "ai_disambiguated" if ai_match else "ai_rejected"
-
-if __name__ == "__main__":
-    import asyncio
-    async def test():
-        # Test exact
-        match, score, t = await EntityMatcher.match_candidate("Solo Leveling", "Solo Leveling", [])
-        assert match and score == 100.0
-        # Test high fuzzy
-        match, score, t = await EntityMatcher.match_candidate("Solo Leveling Season 2", "Solo Leveling", [])
-        assert match and score >= 88.0
-        # Test low reject
-        match, score, t = await EntityMatcher.match_candidate("Naruto Shippuden", "Solo Leveling", [])
-        assert not match and score < 60.0
-        print("EntityMatcher self-check passed!")
-    asyncio.run(test())

@@ -14,3 +14,5 @@ pgdata/
 .vscode/
 .idea/
 *.db
+.pytest_cache/
+.DS_Store

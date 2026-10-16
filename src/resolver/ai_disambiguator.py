@@ -81,17 +81,3 @@ class AIDisambiguator:
 
         logger.error("[AI Disambiguator] Semua model alternatif gagal dihubungi.")
         return False
-
-if __name__ == "__main__":
-    import asyncio
-    async def test():
-        # Uji coba kecocokan judul romanisasi vs judul inggris
-        result = await AIDisambiguator.disambiguate(
-            target_title="Na Honjaman Lebel-eob",
-            canonical_title="Solo Leveling",
-            known_aliases=["I Alone Level Up", "Only I Level Up"]
-        )
-        print("Self-check AI Disambiguator result (Solo Leveling vs Na Honjaman Lebel-eob):", result)
-        assert result is True, "AI should identify Solo Leveling as the same manhwa"
-        print("AI Disambiguator passed successfully!")
-    asyncio.run(test())

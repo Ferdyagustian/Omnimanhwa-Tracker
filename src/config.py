@@ -23,7 +23,7 @@ class Config:
     PROXY_URL = os.getenv("PROXY_URL", "")
 
     # Engine
-    POLL_INTERVAL_MINUTES = int(os.getenv("POLL_INTERVAL_MINUTES", "15"))
+    POLL_INTERVAL_MINUTES = int(os.getenv("POLL_INTERVAL_MINUTES", "20"))
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
     @classmethod

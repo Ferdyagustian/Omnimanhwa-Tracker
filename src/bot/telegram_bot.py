@@ -1,5 +1,6 @@
 import io
 import logging
+import asyncio
 from typing import Optional
 from urllib.parse import urlparse
 import aiohttp
@@ -11,8 +12,8 @@ from telegram.ext import (
 )
 from src.config import Config
 from src.db import Database
-from src.adapters.mangadex import MangaDexAdapter
-from src.adapters.asura import AsuraAdapter
+from src.adapters import ADAPTER_CLASSES, SITE_PRIORITY, MangaDexAdapter, AsuraAdapter
+from src.resolver.matcher import EntityMatcher
 from src.normalizer import normalize_title
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handler /add [judul atau URL]
-    Mendukung pencarian MangaDex, auto-fallback ke AsuraScans, serta URL langsung.
+    Memindai keseluruhan website (MangaDex, Mgeko, AsuraScans, VortexScans, Komiku)
+    dan mengaitkan seluruh website yang menyediakan judul tersebut secara otomatis.
     """
     if not context.args:
         await update.message.reply_text(
@@ -114,103 +116,129 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(caption, parse_mode="Markdown")
         return
 
-    # Skenario 2: Input berupa judul teks biasa
-    status_msg = await update.message.reply_text(f"🔍 Mencari '_{query}_'...", parse_mode="Markdown")
-    
-    # 2.1 Coba cari di MangaDex
+    # Skenario 2: Input berupa judul teks biasa (Memindai seluruh website)
+    status_msg = await update.message.reply_text(f"🔍 Memindai keseluruhan website untuk '_{query}_'...", parse_mode="Markdown")
+
+    bound_sites = []
+    known_aliases = [query]
+    canonical_title = query.title()
+    cover_url = None
+    manhwa_id = None
+
+    # 2.1 Cek ke MangaDex terlebih dahulu untuk seeding data kanonikal & variasi alias
     manga_info = await MangaDexAdapter.search_manga(query)
-
     if manga_info:
-        try:
-            manhwa_id = await Database.insert_manhwa(
-                mangadex_uuid=manga_info["uuid"],
-                canonical_title=manga_info["canonical_title"],
-                cover_image_url=manga_info["cover_url"]
-            )
+        canonical_title = manga_info["canonical_title"]
+        cover_url = manga_info.get("cover_url")
+        manhwa_id = await Database.insert_manhwa(
+            mangadex_uuid=manga_info["uuid"],
+            canonical_title=canonical_title,
+            cover_image_url=cover_url
+        )
 
-            alias_count = 0
-            for alias in manga_info["aliases"]:
-                await Database.insert_alias(
-                    manhwa_id=manhwa_id,
-                    alias_title=alias["alias_title"],
-                    normalized_title=alias["normalized_title"],
-                    lang_code=alias["lang_code"]
-                )
-                alias_count += 1
-
-            await Database.bind_source(
+        for alias in manga_info["aliases"]:
+            await Database.insert_alias(
                 manhwa_id=manhwa_id,
-                site_code="MANGADEX",
-                relative_slug=f"/title/{manga_info['uuid']}"
+                alias_title=alias["alias_title"],
+                normalized_title=alias["normalized_title"],
+                lang_code=alias["lang_code"]
             )
+            known_aliases.append(alias["alias_title"])
 
-            caption = (
-                f"✅ *Target Manhwa Berhasil Didaftarkan!*\n\n"
-                f"🆔 *ID*: `{manhwa_id}`\n"
-                f"📖 *Judul*: *{manga_info['canonical_title']}*\n"
-                f"🏷️ *Alias Tersimpan*: `{alias_count}` variasi nama\n"
-                f"🌐 *Sumber Terikat*: `MANGADEX`\n\n"
-                f"_Gunakan `/bind {manhwa_id} ASURA [slug/url]` untuk menautkan sumber scanlator lain._"
-            )
-
-            img_bytes = await stream_image(manga_info["cover_url"], referer="https://mangadex.org")
-            await status_msg.delete()
-            if img_bytes:
-                await update.message.reply_photo(photo=io.BytesIO(img_bytes), caption=caption, parse_mode="Markdown")
-            else:
-                await update.message.reply_text(caption, parse_mode="Markdown")
-            return
-        except Exception as e:
-            logger.error(f"Gagal menyimpan data MangaDex: {e}")
-
-    # 2.2 Fallback: Jika MangaDex gagal atau tidak ditemukan, cari di AsuraScans langsung!
-    logger.info(f"Mencoba mencari '{query}' di AsuraScans sebagai fallback...")
-    asura = AsuraAdapter()
-    asura_results = await asura.search_comics(query)
-
-    if asura_results:
-        best_match = asura_results[0]
-        slug = best_match["slug"]
-        title = best_match["title"]
-        
-        detail = await asura.get_series_detail(slug)
-        cover_url = detail.get("cover_url") or best_match.get("cover_url")
-
+        await Database.bind_source(
+            manhwa_id=manhwa_id,
+            site_code="MANGADEX",
+            relative_slug=f"/title/{manga_info['uuid']}"
+        )
+        bound_sites.append("MANGADEX")
+    else:
         manhwa_id = await Database.insert_manhwa(
             mangadex_uuid=None,
-            canonical_title=title,
-            cover_image_url=cover_url
+            canonical_title=canonical_title,
+            cover_image_url=None
         )
         await Database.insert_alias(
             manhwa_id=manhwa_id,
-            alias_title=title,
-            normalized_title=normalize_title(title),
+            alias_title=query,
+            normalized_title=normalize_title(query),
             lang_code="en"
         )
-        await Database.bind_source(manhwa_id=manhwa_id, site_code="ASURA", relative_slug=slug)
 
-        caption = (
-            f"✅ *Target Manhwa Ditemukan di AsuraScans!*\n\n"
-            f"🆔 *ID*: `{manhwa_id}`\n"
-            f"📖 *Judul*: *{title}*\n"
-            f"🌐 *Sumber Terikat*: `ASURA` (`{slug}`)\n\n"
-            f"_Engine akan otomatis memantau update chapter terbaru._"
+    # 2.2 Pindai seluruh website scanlator lainnya (Mgeko, Vortex, Asura, Komiku)
+    site_configs = await Database.get_site_configs()
+    site_map = {s["site_code"]: s for s in site_configs}
+
+    async def scan_single_site(site_code: str):
+        cfg = site_map.get(site_code, {})
+        if not cfg.get("is_active", True):
+            return None
+        adapter_cls = ADAPTER_CLASSES.get(site_code)
+        if not adapter_cls:
+            return None
+        adapter = adapter_cls(
+            base_url=cfg.get("base_url", ""),
+            cf_cookie=cfg.get("cf_clearance_cookie"),
+            user_agent=cfg.get("cf_user_agent"),
+            proxy_url=cfg.get("proxy_url")
         )
+        try:
+            results = await adapter.search_comics(canonical_title)
+            if not results and query.lower() != canonical_title.lower():
+                results = await adapter.search_comics(query)
 
-        img_bytes = await stream_image(cover_url, referer="https://asurascans.com") if cover_url else None
-        await status_msg.delete()
-        if img_bytes:
-            await update.message.reply_photo(photo=io.BytesIO(img_bytes), caption=caption, parse_mode="Markdown")
-        else:
-            await update.message.reply_text(caption, parse_mode="Markdown")
+            for r in results:
+                is_match, score, _ = await EntityMatcher.match_candidate(
+                    candidate_title=r["title"],
+                    canonical_title=canonical_title,
+                    known_aliases=known_aliases
+                )
+                if is_match or score >= 75.0:
+                    return (site_code, r["slug"], r.get("cover_url"))
+        except Exception as e:
+            logger.warning(f"Gagal mencari di {site_code}: {e}")
+        return None
+
+    other_sites = ["MGEKO", "VORTEX", "ASURA", "KOMIKU"]
+    scan_results = await asyncio.gather(*(scan_single_site(s) for s in other_sites), return_exceptions=True)
+
+    for res in scan_results:
+        if res and isinstance(res, tuple):
+            s_code, s_slug, s_cover = res
+            await Database.bind_source(manhwa_id=manhwa_id, site_code=s_code, relative_slug=s_slug)
+            bound_sites.append(s_code)
+            if not cover_url and s_cover:
+                cover_url = s_cover
+
+    if not bound_sites:
+        await Database.delete_manhwa(manhwa_id)
+        await status_msg.edit_text(
+            f"❌ Manhwa '_{query}_' tidak ditemukan di website mana pun ({', '.join(VALID_SITES)}).\n\n"
+            f"💡 Tips: Anda dapat menambahkan target menggunakan URL langsung, contoh:\n"
+            f"`/add https://asurascans.com/comics/...`",
+            parse_mode="Markdown"
+        )
         return
 
-    await status_msg.edit_text(
-        f"❌ Manhwa '_{query}_' tidak ditemukan di MangaDex maupun AsuraScans.\n\n"
-        f"💡 Tips: Anda dapat menambahkan target menggunakan URL langsung, contoh:\n"
-        f"`/add https://asurascans.com/comics/...`",
-        parse_mode="Markdown"
+    # Urutkan sumber yang terikat sesuai SITE_PRIORITY
+    bound_sites.sort(key=lambda s: SITE_PRIORITY.get(s, 99))
+    sites_str = ", ".join(f"`{s}`" for s in bound_sites)
+
+    caption = (
+        f"✅ *Target Manhwa Berhasil Didaftarkan!*\n\n"
+        f"🆔 *ID*: `{manhwa_id}`\n"
+        f"📖 *Judul*: *{canonical_title}*\n"
+        f"🌐 *Sumber Terikat*: {sites_str}\n\n"
+        f"_Engine otomatis membandingkan rilis chapter antar sumber dan memprioritaskan update tercepat._"
     )
+
+    referer = "https://mangadex.org" if "MANGADEX" in bound_sites else "https://asurascans.com"
+    img_bytes = await stream_image(cover_url, referer=referer) if cover_url else None
+    await status_msg.delete()
+    if img_bytes:
+        await update.message.reply_photo(photo=io.BytesIO(img_bytes), caption=caption, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(caption, parse_mode="Markdown")
+
 
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
