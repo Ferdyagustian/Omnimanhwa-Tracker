@@ -4,11 +4,14 @@ import asyncio
 from typing import Optional
 from urllib.parse import urlparse
 import aiohttp
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
-    ContextTypes
+    ContextTypes,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters
 )
 from src.config import Config
 from src.db import Database
@@ -19,6 +22,14 @@ from src.normalizer import normalize_title
 logger = logging.getLogger(__name__)
 
 VALID_SITES = ["MGEKO", "MANGADEX", "VORTEX", "ASURA", "KOMIKU"]
+
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        ["📚 Daftar Pantauan", "➕ Tambah Komik"],
+        ["🩺 Status Server", "❓ Panduan"]
+    ],
+    resize_keyboard=True
+)
 
 async def stream_image(url: str, referer: Optional[str] = None) -> Optional[bytes]:
     """
@@ -43,23 +54,21 @@ async def stream_image(url: str, referer: Optional[str] = None) -> Optional[byte
     return None
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler perintah /start dan /help"""
+    """Handler perintah /start dan /help dengan tata letak editorial Taste"""
     msg = (
-        "🤖 *OmniManhwa Tracker Engine (OMTE) v1.2*\n"
+        "⚡ *OmniManhwa Tracker Engine*\n"
+        "────────────────────────\n"
         "Sistem Pelacak Chapter Manhwa 24/7 (EN/ID)\n\n"
-        "📋 *Daftar Perintah Manajemen Target:*\n"
-        "• `/add [judul atau URL]` — Tambahkan manhwa ke target pantauan\n"
-        "• `/list` — Lihat semua manhwa yang sedang ditargetkan\n"
-        "• `/delete [id]` — Hapus manhwa dari target pantauan (alias: `/remove`)\n"
-        "• `/bind [manhwa_id] [situs] [slug/url]` — Tautkan link situs manual\n"
-        "• `/domain [situs] [new_url]` — Perbarui base URL situs jika berganti\n"
-        "• `/health` — Cek status server, RAM, Swap & database\n\n"
-        "💡 *Contoh Cepat:*\n"
-        "1. `/add Solo Leveling`\n"
-        "2. `/add https://asurascans.com/comics/shadow-slave-1bb35e56`\n"
-        "3. `/delete 1`"
+        "📌 *Navigasi & Perintah:*\n"
+        "• `/add [judul/URL]` — Tambah target pantauan\n"
+        "• `/list` — Lihat daftar komik & aksi cepat\n"
+        "• `/delete [id]` — Hapus komik dari target\n"
+        "• `/bind [id] [situs] [slug]` — Tautkan sumber manual\n"
+        "• `/domain [situs] [url]` — Perbarui domain situs\n"
+        "• `/health` — Metrik server & status engine\n\n"
+        "💡 _Contoh:_ `/add Solo Leveling`"
     )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -137,19 +146,21 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.warning(f"Gagal seeding awal URL {site_code}: {se}")
 
         caption = (
-            f"✅ *Target Manhwa Berhasil Ditambahkan via URL!*\n\n"
-            f"🆔 *ID*: `{manhwa_id}`\n"
-            f"📖 *Judul*: *{title}*\n"
-            f"🌐 *Sumber Terikat*: `{site_code}` (`{series_path}`)\n\n"
-            f"_Engine akan otomatis memantau update chapter terbaru._"
+            "✅ *TARGET DITAMBAHKAN (URL)*\n"
+            "────────────────────────\n"
+            f"📖 *{title}*\n"
+            f"🆔 Target : `#{manhwa_id}`\n"
+            f"🌐 Sumber : `{site_code}` (`{series_path}`)\n"
+            "────────────────────────\n"
+            "⚡ _Engine otomatis memantau rilis chapter 24/7._"
         )
 
         img_bytes = await stream_image(cover_url, referer="https://asurascans.com") if cover_url else None
         await status_msg.delete()
         if img_bytes:
-            await update.message.reply_photo(photo=io.BytesIO(img_bytes), caption=caption, parse_mode="Markdown")
+            await update.message.reply_photo(photo=io.BytesIO(img_bytes), caption=caption, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
         else:
-            await update.message.reply_text(caption, parse_mode="Markdown")
+            await update.message.reply_text(caption, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
         return
 
     # Skenario 2: Input berupa judul teks biasa (Memindai seluruh website)
@@ -293,57 +304,65 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sites_str = ", ".join(f"`{s}`" for s in bound_sites)
 
     caption = (
-        f"✅ *Target Manhwa Berhasil Didaftarkan!*\n\n"
-        f"🆔 *ID*: `{manhwa_id}`\n"
-        f"📖 *Judul*: *{canonical_title}*\n"
-        f"🌐 *Sumber Terikat*: {sites_str}\n\n"
-        f"_Engine otomatis membandingkan rilis chapter antar sumber dan memprioritaskan update tercepat._"
+        "✅ *TARGET DITAMBAHKAN*\n"
+        "────────────────────────\n"
+        f"📖 *{canonical_title}*\n"
+        f"🆔 Target : `#{manhwa_id}`\n"
+        f"🌐 Sumber : {sites_str}\n"
+        "────────────────────────\n"
+        "⚡ _Engine otomatis membandingkan rilis tercepat 24/7._"
     )
 
     referer = "https://mangadex.org" if "MANGADEX" in bound_sites else "https://asurascans.com"
     img_bytes = await stream_image(cover_url, referer=referer) if cover_url else None
     await status_msg.delete()
     if img_bytes:
-        await update.message.reply_photo(photo=io.BytesIO(img_bytes), caption=caption, parse_mode="Markdown")
+        await update.message.reply_photo(photo=io.BytesIO(img_bytes), caption=caption, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
     else:
-        await update.message.reply_text(caption, parse_mode="Markdown")
+        await update.message.reply_text(caption, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
 
 
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handler /list
-    Menampilkan semua manhwa yang sedang ditargetkan beserta sumber dan chapter terakhir.
+    Menampilkan semua manhwa yang sedang ditargetkan dengan kartu editorial Taste & tombol aksi cepat.
     """
     try:
         manhwas = await Database.get_tracked_manhwas_with_sources()
         if not manhwas:
             await update.message.reply_text(
                 "📭 *Daftar target pantauan masih kosong.*\n\n"
-                "Gunakan `/add [judul atau URL]` untuk menambahkan manhwa baru ke daftar pantauan.",
-                parse_mode="Markdown"
+                "Gunakan tombol *➕ Tambah Komik* atau ketik `/add [judul]` untuk mulai melacak.",
+                parse_mode="Markdown",
+                reply_markup=MAIN_KEYBOARD
             )
             return
 
-        lines = [f"📚 *Daftar Manhwa Target Pantauan (Total: {len(manhwas)}):*\n"]
-        for idx, m in enumerate(manhwas, 1):
+        lines = [
+            f"📚 *TARGET PANTAUAN* `({len(manhwas)})`",
+            "────────────────────────"
+        ]
+        del_buttons = []
+        for m in manhwas:
             ch_en = m.get('latest_chapter_en', 0)
             ch_id = m.get('latest_chapter_id', 0)
             sources_list = m.get('sources') or []
-            sources_str = ", ".join(sources_list) if sources_list else "_Belum ada sumber terikat_"
+            sources_str = " · ".join(sources_list) if sources_list else "Belum terikat"
 
             lines.append(
-                f"{idx}. `[ID: {m['id']}]` *{m['canonical_title']}*\n"
-                f"   ├ 🌐 Sumber: `{sources_str}`\n"
-                f"   └ 🇬🇧 EN: `Ch. {ch_en}` | 🇮🇩 ID: `Ch. {ch_id}`\n"
+                f"#{m['id']} *{m['canonical_title']}*\n"
+                f"├ 🌐 `{sources_str}`\n"
+                f"└ 🇬🇧 `Ch. {ch_en}` │ 🇮🇩 `Ch. {ch_id}`\n"
             )
+            del_buttons.append(InlineKeyboardButton(f"🗑️ #{m['id']}", callback_data=f"del_ask:{m['id']}"))
 
-        lines.append(
-            "💡 *Perintah Terkait:*\n"
-            "• Hapus target: `/delete [id]` (contoh: `/delete 1`)\n"
-            "• Tautkan link: `/bind [id] [situs] [url]`"
-        )
+        lines.append("────────────────────────")
+        lines.append("💡 _Ketuk tombol di bawah untuk menghapus target tanpa mengetik._")
 
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        keyboard = [del_buttons[i:i+3] for i in range(0, len(del_buttons), 3)]
+        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Error pada /list: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Gagal mengambil daftar target: {e}")
@@ -487,11 +506,14 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     engine_name = getattr(Database, "_engine", "postgres").upper()
     msg = (
-        "🩺 *OMTE Health Status*\n\n"
-        f"• *Memory*: `{ram_text}`\n"
-        f"• *Swap Memory*: `{swap_text}`\n"
-        f"• *Status Engine*: `ACTIVE 24/7`\n"
-        f"• *Database*: `Connected ({engine_name})`\n"
+        "🩺 *STATUS SERVER & ENGINE*\n"
+        "────────────────────────\n"
+        f"• *Status Engine* : `ONLINE (24/7)`\n"
+        f"• *RAM*           : `{ram_text}`\n"
+        f"• *Swap*          : `{swap_text}`\n"
+        f"• *Database*      : `{engine_name} Connected`\n"
+        "────────────────────────\n"
+        "🚀 _Semua adapter aktif & siap mendeteksi rilis._"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
@@ -506,14 +528,17 @@ async def send_release_notification(
     cover_image_url: Optional[str] = None
 ):
     """
-    Mengirimkan notifikasi rilis chapter baru lengkap dengan foto & link button
+    Mengirimkan notifikasi rilis chapter baru dengan format kartu editorial Taste
     """
-    flag = "🇬🇧 [EN]" if language.upper() == "EN" else "🇮🇩 [ID]"
+    flag = "🇬🇧 EN" if language.upper() == "EN" else "🇮🇩 ID"
     caption = (
-        f"🚨 *NEW CHAPTER RELEASE!* {flag}\n\n"
+        f"🚨 *NEW CHAPTER RELEASE* │ {flag}\n"
+        "────────────────────────\n"
         f"📖 *{title}*\n"
-        f"📑 *Chapter*: `Ch. {chapter_num}`\n"
-        f"🌐 *Sumber*: `{site_code}`\n"
+        f"📑 Chapter : `Ch. {chapter_num}`\n"
+        f"🌐 Sumber  : `{site_code}`\n"
+        "────────────────────────\n"
+        "⚡ _Update terdeteksi oleh OmniManhwa Engine._"
     )
 
     keyboard = [[InlineKeyboardButton("🚀 Baca Sekarang", url=chapter_url)]]
@@ -537,6 +562,76 @@ async def send_release_notification(
             reply_markup=reply_markup
         )
 
+async def quick_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler pesan tombol navigasi cepat (Reply Keyboard)"""
+    text = (update.message.text or "").strip()
+    if text == "📚 Daftar Pantauan":
+        await list_command(update, context)
+    elif text == "➕ Tambah Komik":
+        await update.message.reply_text(
+            "➕ *Tambah Target Manhwa*\n"
+            "────────────────────────\n"
+            "Kirim pesan dengan format:\n"
+            "`/add [judul komik]` atau `/add [link URL]`\n\n"
+            "💡 _Contoh:_\n"
+            "• `/add Solo Leveling`\n"
+            "• `/add https://asurascans.com/comics/...`",
+            parse_mode="Markdown",
+            reply_markup=MAIN_KEYBOARD
+        )
+    elif text == "🩺 Status Server":
+        await health_command(update, context)
+    elif text == "❓ Panduan":
+        await start_command(update, context)
+
+async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler aksi inline button: konfirmasi hapus dua tahap"""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data or ""
+    if data.startswith("del_ask:"):
+        try:
+            m_id = int(data.split(":")[1])
+            manhwa = await Database.get_manhwa_by_id(m_id)
+            title = manhwa["canonical_title"] if manhwa else f"Target #{m_id}"
+            confirm_kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Ya, Hapus", callback_data=f"del_yes:{m_id}"),
+                    InlineKeyboardButton("❌ Batal", callback_data="del_cancel")
+                ]
+            ])
+            await query.edit_message_text(
+                f"⚠️ *Konfirmasi Hapus Target*\n"
+                f"────────────────────────\n"
+                f"Yakin ingin menghapus *{title}* (`#{m_id}`) dari daftar pantauan?",
+                parse_mode="Markdown",
+                reply_markup=confirm_kb
+            )
+        except Exception as e:
+            logger.error(f"Error pada del_ask: {e}")
+            await query.edit_message_text(f"❌ Terjadi kesalahan: {e}")
+
+    elif data.startswith("del_yes:"):
+        try:
+            m_id = int(data.split(":")[1])
+            deleted_title = await Database.delete_manhwa(m_id)
+            if deleted_title:
+                await query.edit_message_text(
+                    f"🗑️ *Target Berhasil Dihapus*\n"
+                    f"────────────────────────\n"
+                    f"*{deleted_title}* (`#{m_id}`) tidak lagi dipantau oleh engine.",
+                    parse_mode="Markdown"
+                )
+            else:
+                await query.edit_message_text(f"❌ Target `#{m_id}` tidak ditemukan.", parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Error pada del_yes: {e}")
+            await query.edit_message_text(f"❌ Gagal menghapus target: {e}")
+
+    elif data == "del_cancel":
+        await query.edit_message_text("👌 *Penghapusan dibatalkan.*", parse_mode="Markdown")
+
 def setup_telegram_bot() -> Application:
     """Menginisialisasi Telegram Bot Application"""
     token = Config.TELEGRAM_BOT_TOKEN
@@ -554,5 +649,7 @@ def setup_telegram_bot() -> Application:
     app.add_handler(CommandHandler("bind", bind_command))
     app.add_handler(CommandHandler("domain", domain_command))
     app.add_handler(CommandHandler("health", health_command))
+    app.add_handler(CallbackQueryHandler(callback_query_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, quick_button_handler))
 
     return app

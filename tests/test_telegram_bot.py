@@ -29,12 +29,30 @@ class TestTelegramBot(unittest.TestCase):
         # Verify all handlers are registered in group 0
         handlers = app.handlers.get(0, [])
         command_names = set()
+        has_callback_handler = False
+        has_message_handler = False
         for h in handlers:
             if hasattr(h, "commands"):
                 command_names.update(h.commands)
+            from telegram.ext import CallbackQueryHandler, MessageHandler
+            if isinstance(h, CallbackQueryHandler):
+                has_callback_handler = True
+            if isinstance(h, MessageHandler):
+                has_message_handler = True
 
         expected_commands = {"start", "help", "add", "bind", "domain", "list", "health", "delete", "remove"}
         self.assertTrue(expected_commands.issubset(command_names))
+        self.assertTrue(has_callback_handler)
+        self.assertTrue(has_message_handler)
+
+    def test_main_keyboard_layout(self):
+        from src.bot.telegram_bot import MAIN_KEYBOARD
+        keyboard = MAIN_KEYBOARD.keyboard
+        self.assertEqual(len(keyboard), 2)
+        row1_texts = [b.text for b in keyboard[0]]
+        row2_texts = [b.text for b in keyboard[1]]
+        self.assertEqual(row1_texts, ["📚 Daftar Pantauan", "➕ Tambah Komik"])
+        self.assertEqual(row2_texts, ["🩺 Status Server", "❓ Panduan"])
 
 if __name__ == "__main__":
     unittest.main()
