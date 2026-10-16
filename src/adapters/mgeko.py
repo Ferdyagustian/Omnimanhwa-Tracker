@@ -15,7 +15,7 @@ class MgekoAdapter(BaseScraper):
         Mencari komik di Mgeko berdasarkan kata kunci judul.
         Returns: [{'slug': str, 'title': str, 'cover_url': Optional[str]}]
         """
-        url = f"search/?q={quote_plus(query)}"
+        url = f"autocomplete?term={quote_plus(query)}"
         html, _, _ = await self.get_html(url)
         if not html:
             return []
@@ -26,7 +26,8 @@ class MgekoAdapter(BaseScraper):
             href = a.attributes.get("href", "")
             if not href or any(x in href for x in ["/chapter", "/reader", "genre", "latest"]):
                 continue
-            text = a.text(strip=True) or a.attributes.get("title", "").strip()
+            h4 = a.css_first("h4")
+            text = (a.attributes.get("title") or (h4.text(strip=True) if h4 else "") or a.text(strip=True)).strip()
             if not text or len(text) <= 2 or text.replace(".", "").isdigit():
                 continue
             path = urlparse(href).path if href.startswith("http") else href
