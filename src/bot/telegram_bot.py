@@ -17,7 +17,7 @@ from src.normalizer import normalize_title
 
 logger = logging.getLogger(__name__)
 
-VALID_SITES = {"MANGADEX", "ASURA", "KOMIKU", "VORTEX", "MGEKO"}
+VALID_SITES = ["MGEKO", "MANGADEX", "VORTEX", "ASURA", "KOMIKU"]
 
 async def stream_image(url: str, referer: Optional[str] = None) -> Optional[bytes]:
     """
@@ -297,7 +297,7 @@ async def bind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "⚠️ Format salah!\nGunakan: `/bind [manhwa_id] [site] [url_atau_slug]`\n"
             "Contoh: `/bind 1 ASURA /comics/shadow-slave-1bb35e56`\n"
-            f"Situs valid: `{', '.join(sorted(VALID_SITES))}`",
+            f"Situs valid: `{', '.join(VALID_SITES)}`",
             parse_mode="Markdown"
         )
         return
@@ -311,7 +311,7 @@ async def bind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     site_code = context.args[1].upper()
     if site_code not in VALID_SITES:
         await update.message.reply_text(
-            f"❌ Situs `{site_code}` tidak valid! Pilihan: `{', '.join(sorted(VALID_SITES))}`",
+            f"❌ Situs `{site_code}` tidak valid! Pilihan: `{', '.join(VALID_SITES)}`",
             parse_mode="Markdown"
         )
         return

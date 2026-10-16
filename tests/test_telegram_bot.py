@@ -4,7 +4,7 @@ from src.bot.telegram_bot import setup_telegram_bot, VALID_SITES
 
 class TestTelegramBot(unittest.TestCase):
     def test_valid_sites_definition(self):
-        expected = {"MANGADEX", "ASURA", "KOMIKU", "VORTEX", "MGEKO"}
+        expected = ["MGEKO", "MANGADEX", "VORTEX", "ASURA", "KOMIKU"]
         self.assertEqual(VALID_SITES, expected)
 
     def test_slug_normalization_logic(self):

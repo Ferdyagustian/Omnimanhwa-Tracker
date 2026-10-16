@@ -36,10 +36,10 @@ class Database:
 
         INSERT OR IGNORE INTO site_configs (site_code, base_url, language, poll_interval_minutes)
         VALUES 
-            ('MANGADEX', 'https://mangadex.org', 'MULTI', 15),
-            ('ASURA', 'https://asurascans.com', 'EN', 10),
-            ('VORTEX', 'https://vortexscans.org', 'EN', 10),
             ('MGEKO', 'https://www.mgeko.cc', 'EN', 15),
+            ('MANGADEX', 'https://mangadex.org', 'MULTI', 15),
+            ('VORTEX', 'https://vortexscans.org', 'EN', 10),
+            ('ASURA', 'https://asurascans.com', 'EN', 10),
             ('KOMIKU', 'https://komiku.org', 'ID', 15);
 
         CREATE TABLE IF NOT EXISTS manhwas (
@@ -265,6 +265,22 @@ class Database:
         else:
             async with cls._pool.acquire() as conn:
                 rows = await conn.fetch("SELECT * FROM manhwas WHERE is_tracking = TRUE ORDER BY canonical_title ASC")
+                return [dict(r) for r in rows]
+
+    @classmethod
+    async def get_manhwa_sources(cls, manhwa_id: int) -> List[Dict[str, Any]]:
+        await cls.get_pool()
+        order_clause = "ORDER BY CASE site_code WHEN 'MGEKO' THEN 1 WHEN 'MANGADEX' THEN 2 WHEN 'VORTEX' THEN 3 WHEN 'ASURA' THEN 4 WHEN 'KOMIKU' THEN 5 ELSE 99 END ASC"
+        if cls._engine == "sqlite":
+            conn = sqlite3.connect(SQLITE_DB_PATH)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(f"SELECT * FROM manhwa_sources WHERE manhwa_id = ? {order_clause}", (manhwa_id,)).fetchall()
+            res = [dict(r) for r in rows]
+            conn.close()
+            return res
+        else:
+            async with cls._pool.acquire() as conn:
+                rows = await conn.fetch(f"SELECT * FROM manhwa_sources WHERE manhwa_id = $1 {order_clause}", manhwa_id)
                 return [dict(r) for r in rows]
 
     @classmethod

@@ -16,7 +16,7 @@ class MgekoAdapter(BaseScraper):
 
         chapters: List[Dict[str, Any]] = []
         seen_urls = set()
-        links = html.css(".chapter-list a, ul.chapter-list li a, a[href*='/chapter-']")
+        links = html.css(".chapter-list a, ul.chapter-list li a, a[href*='chapter']")
         
         for a in links:
             href = a.attributes.get("href", "")
@@ -29,14 +29,16 @@ class MgekoAdapter(BaseScraper):
                 continue
             seen_urls.add(full_url)
 
-            ch_num, is_special, _ = parse_chapter_info(title_text)
-            if ch_num is None:
-                ch_num, is_special, _ = parse_chapter_info(href)
+            ch_num_href, is_special_href, _ = parse_chapter_info(href)
+            ch_num_text, is_special_text, _ = parse_chapter_info(title_text)
+
+            ch_num = ch_num_href if ch_num_href is not None else ch_num_text
+            is_special = is_special_href or is_special_text
 
             if ch_num is not None:
                 chapters.append({
                     "chapter_num": ch_num,
-                    "chapter_raw_title": title_text,
+                    "chapter_raw_title": f"Chapter {int(ch_num) if ch_num.is_integer() else ch_num}",
                     "chapter_url": full_url,
                     "is_special": is_special
                 })

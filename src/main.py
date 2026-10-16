@@ -18,13 +18,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger("OMTE_CORE")
 
-# Factory adapter map (Semua 5 situs terdaftar)
+# Urutan prioritas scraping sesuai permintaan user:
+# 1. Mgeko -> 2. MangaDex -> 3. VortexScans -> 4. AsuraScans -> 5. Komiku
+SITE_PRIORITY = {
+    "MGEKO": 1,
+    "MANGADEX": 2,
+    "VORTEX": 3,
+    "ASURA": 4,
+    "KOMIKU": 5,
+}
+
 ADAPTER_CLASSES = {
+    "MGEKO": MgekoAdapter,
     "MANGADEX": MangaDexAdapter,
+    "VORTEX": VortexAdapter,
     "ASURA": AsuraAdapter,
     "KOMIKU": KomikuAdapter,
-    "VORTEX": VortexAdapter,
-    "MGEKO": MgekoAdapter,
 }
 
 async def poll_single_source(bot, manhwa: Dict[str, Any], source: Dict[str, Any], site_cfg: Dict[str, Any]):
@@ -99,15 +108,10 @@ async def tracker_worker_loop(bot):
             site_map = {s["site_code"]: s for s in site_configs_list}
 
             manhwas = await Database.get_tracked_manhwas()
-            pool = await Database.get_pool()
-            
             for m in manhwas:
-                async with pool.acquire() as conn:
-                    sources = await conn.fetch(
-                        "SELECT * FROM manhwa_sources WHERE manhwa_id = $1",
-                        m["id"]
-                    )
-                
+                sources = await Database.get_manhwa_sources(m["id"])
+                # Urutkan sumber berdasarkan urutan prioritas: MGEKO -> MANGADEX -> VORTEX -> ASURA -> KOMIKU
+                sources.sort(key=lambda s: SITE_PRIORITY.get(s["site_code"], 99))
                 for s in sources:
                     site_cfg = site_map.get(s["site_code"])
                     if site_cfg and site_cfg.get("is_active", True):
