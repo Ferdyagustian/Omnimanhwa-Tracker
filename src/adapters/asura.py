@@ -44,7 +44,6 @@ class AsuraAdapter(BaseScraper):
         chapters: List[Dict[str, Any]] = []
         seen_urls = set()
         
-        # Link chapter di Asura formatnya '/comics/{slug}/chapter/{num}'
         links = html.css("a[href*='/chapter/'], a[href*='-chapter-']")
         
         for a in links:
@@ -58,10 +57,13 @@ class AsuraAdapter(BaseScraper):
                 continue
             seen_urls.add(full_url)
             
-            # Prioritaskan ekstrak dari URL href (/chapter/13) karena title_text sering tercampur teks waktu ("Chapter139 hours ago")
-            ch_num, is_special, _ = parse_chapter_info(href)
-            if ch_num is None:
-                ch_num, is_special, _ = parse_chapter_info(title_text)
+            # Prioritaskan ekstrak nomor chapter dari URL href (/chapter/13) jika ada,
+            # dan gabungkan deteksi is_special dari teks maupun href
+            ch_num_href, is_special_href, _ = parse_chapter_info(href)
+            ch_num_text, is_special_text, _ = parse_chapter_info(title_text)
+
+            ch_num = ch_num_href if ch_num_href is not None else ch_num_text
+            is_special = is_special_href or is_special_text
 
             if ch_num is not None:
                 raw_title = f"Chapter {int(ch_num) if ch_num.is_integer() else ch_num}"
@@ -72,6 +74,5 @@ class AsuraAdapter(BaseScraper):
                     "is_special": is_special
                 })
 
-        # Urutkan dari chapter terbaru (nomor terbesar) ke terkecil
         chapters.sort(key=lambda x: x["chapter_num"], reverse=True)
         return chapters

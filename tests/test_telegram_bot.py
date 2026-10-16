@@ -33,7 +33,7 @@ class TestTelegramBot(unittest.TestCase):
             if hasattr(h, "commands"):
                 command_names.update(h.commands)
 
-        expected_commands = {"start", "help", "add", "bind", "domain", "list", "health"}
+        expected_commands = {"start", "help", "add", "bind", "domain", "list", "health", "delete", "remove"}
         self.assertTrue(expected_commands.issubset(command_names))
 
 if __name__ == "__main__":

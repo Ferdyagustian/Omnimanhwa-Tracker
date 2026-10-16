@@ -12,6 +12,8 @@ from telegram.ext import (
 from src.config import Config
 from src.db import Database
 from src.adapters.mangadex import MangaDexAdapter
+from src.adapters.asura import AsuraAdapter
+from src.normalizer import normalize_title
 
 logger = logging.getLogger(__name__)
 
@@ -40,34 +42,93 @@ async def stream_image(url: str, referer: Optional[str] = None) -> Optional[byte
     return None
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler perintah /start"""
+    """Handler perintah /start dan /help"""
     msg = (
         "🤖 *OmniManhwa Tracker Engine (OMTE) v1.2*\n"
-        "Pelacak chapter manhwa 24/7 lintas situs (EN/ID).\n\n"
-        "📖 *Daftar Perintah:*\n"
-        "• `/add [judul]` — Tambah manhwa & seeding alias MangaDex\n"
-        "• `/list` — Lihat daftar pantauan & chapter terakhir\n"
-        "• `/bind [manhwa_id] [site] [url_atau_slug]` — Tautkan link situs manual\n"
-        "• `/domain [site] [new_url]` — Perbarui base URL situs\n"
-        "• `/health` — Cek status sistem, RAM & database\n"
+        "Sistem Pelacak Chapter Manhwa 24/7 (EN/ID)\n\n"
+        "📋 *Daftar Perintah Manajemen Target:*\n"
+        "• `/add [judul atau URL]` — Tambahkan manhwa ke target pantauan\n"
+        "• `/list` — Lihat semua manhwa yang sedang ditargetkan\n"
+        "• `/delete [id]` — Hapus manhwa dari target pantauan (alias: `/remove`)\n"
+        "• `/bind [manhwa_id] [situs] [slug/url]` — Tautkan link situs manual\n"
+        "• `/domain [situs] [new_url]` — Perbarui base URL situs jika berganti\n"
+        "• `/health` — Cek status server, RAM, Swap & database\n\n"
+        "💡 *Contoh Cepat:*\n"
+        "1. `/add Solo Leveling`\n"
+        "2. `/add https://asurascans.com/comics/shadow-slave-1bb35e56`\n"
+        "3. `/delete 1`"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler /add [judul]"""
+    """
+    Handler /add [judul atau URL]
+    Mendukung penambahan langsung via judul atau tautan langsung situs scanlator.
+    """
     if not context.args:
-        await update.message.reply_text("⚠️ Format salah! Gunakan: `/add [judul manhwa]`", parse_mode="Markdown")
+        await update.message.reply_text(
+            "⚠️ Format salah!\nGunakan: `/add [judul atau URL]`\nContoh: `/add Solo Leveling` atau `/add https://asurascans.com/comics/shadow-slave-1bb35e56`",
+            parse_mode="Markdown"
+        )
         return
 
-    query = " ".join(context.args)
+    query = " ".join(context.args).strip()
+
+    # Skenario 1: Input berupa URL langsung (misal dari AsuraScans)
+    if query.startswith("http"):
+        parsed = urlparse(query)
+        domain = parsed.netloc.lower()
+        path = parsed.path
+
+        status_msg = await update.message.reply_text("🔍 Membaca detail manhwa dari URL langsung...", parse_mode="Markdown")
+
+        if "asura" in domain:
+            asura = AsuraAdapter()
+            detail = await asura.get_series_detail(path)
+            title = detail.get("title") or path.strip("/").split("/")[-1].replace("-", " ").title()
+            cover_url = detail.get("cover_url")
+
+            manhwa_id = await Database.insert_manhwa(
+                mangadex_uuid=None,
+                canonical_title=title,
+                cover_image_url=cover_url
+            )
+            await Database.insert_alias(
+                manhwa_id=manhwa_id,
+                alias_title=title,
+                normalized_title=normalize_title(title),
+                lang_code="en"
+            )
+            await Database.bind_source(manhwa_id=manhwa_id, site_code="ASURA", relative_slug=path)
+
+            caption = (
+                f"✅ *Target Manhwa Berhasil Ditambahkan via URL!*\n\n"
+                f"🆔 *ID*: `{manhwa_id}`\n"
+                f"📖 *Judul*: *{title}*\n"
+                f"🌐 *Sumber Terikat*: `ASURA` (`{path}`)\n\n"
+                f"_Engine akan otomatis memantau update chapter terbaru._"
+            )
+
+            img_bytes = await stream_image(cover_url, referer="https://asurascans.com") if cover_url else None
+            await status_msg.delete()
+            if img_bytes:
+                await update.message.reply_photo(photo=io.BytesIO(img_bytes), caption=caption, parse_mode="Markdown")
+            else:
+                await update.message.reply_text(caption, parse_mode="Markdown")
+            return
+
+    # Skenario 2: Input berupa judul teks biasa (Cari di MangaDex)
     status_msg = await update.message.reply_text(f"🔍 Mencari '_{query}_' di MangaDex...", parse_mode="Markdown")
-
     manga_info = await MangaDexAdapter.search_manga(query)
+
     if not manga_info:
-        await status_msg.edit_text(f"❌ Manhwa '_{query}_' tidak ditemukan di MangaDex. Coba variasi nama lain.", parse_mode="Markdown")
+        await status_msg.edit_text(
+            f"❌ Manhwa '_{query}_' tidak ditemukan di MangaDex.\n"
+            f"💡 Tips: Anda juga bisa menambahkan via URL langsung, contoh:\n`/add https://asurascans.com/comics/...`",
+            parse_mode="Markdown"
+        )
         return
 
-    # Simpan ke Database
     try:
         manhwa_id = await Database.insert_manhwa(
             mangadex_uuid=manga_info["uuid"],
@@ -93,22 +154,18 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         caption = (
-            f"✅ *Manhwa Berhasil Didaftarkan!*\n\n"
+            f"✅ *Target Manhwa Berhasil Didaftarkan!*\n\n"
             f"🆔 *ID*: `{manhwa_id}`\n"
             f"📖 *Judul*: *{manga_info['canonical_title']}*\n"
-            f"🏷️ *Alias Tersimpan*: `{alias_count}` variasi\n"
-            f"🔗 *UUID*: `{manga_info['uuid']}`\n\n"
-            f"_Sumber MangaDex otomatis terikat. Gunakan `/bind {manhwa_id} ASURA [slug]` untuk menautkan situs lain._"
+            f"🏷️ *Alias Tersimpan*: `{alias_count}` variasi nama\n"
+            f"🌐 *Sumber Terikat*: `MANGADEX`\n\n"
+            f"_Gunakan `/bind {manhwa_id} ASURA [slug/url]` untuk menautkan sumber situs scanlator lain._"
         )
 
         img_bytes = await stream_image(manga_info["cover_url"], referer="https://mangadex.org")
         await status_msg.delete()
         if img_bytes:
-            await update.message.reply_photo(
-                photo=io.BytesIO(img_bytes),
-                caption=caption,
-                parse_mode="Markdown"
-            )
+            await update.message.reply_photo(photo=io.BytesIO(img_bytes), caption=caption, parse_mode="Markdown")
         else:
             await update.message.reply_text(caption, parse_mode="Markdown")
 
@@ -116,12 +173,91 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Gagal menyimpan manhwa ke DB: {e}")
         await status_msg.edit_text(f"❌ Terjadi kesalahan saat menyimpan ke database: {e}")
 
+async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handler /list
+    Menampilkan semua manhwa yang sedang ditargetkan beserta sumber dan chapter terakhir.
+    """
+    try:
+        manhwas = await Database.get_tracked_manhwas_with_sources()
+        if not manhwas:
+            await update.message.reply_text(
+                "📭 *Daftar target pantauan masih kosong.*\n"
+                "Gunakan `/add [judul atau URL]` untuk menambahkan manhwa baru.",
+                parse_mode="Markdown"
+            )
+            return
+
+        lines = [f"📚 *Daftar Manhwa Target Pantauan (Total: {len(manhwas)}):*\n"]
+        for idx, m in enumerate(manhwas, 1):
+            ch_en = m.get('latest_chapter_en', 0)
+            ch_id = m.get('latest_chapter_id', 0)
+            sources_list = m.get('sources') or []
+            sources_str = ", ".join(sources_list) if sources_list else "_Belum ada sumber terikat_"
+
+            lines.append(
+                f"{idx}. `[ID: {m['id']}]` *{m['canonical_title']}*\n"
+                f"   ├ 🌐 Sumber: `{sources_str}`\n"
+                f"   └ 🇬🇧 EN: `Ch. {ch_en}` | 🇮🇩 ID: `Ch. {ch_id}`\n"
+            )
+
+        lines.append(
+            "💡 *Perintah Terkait:*\n"
+            "• Hapus target: `/delete [id]` (contoh: `/delete 1`)\n"
+            "• Tautkan link: `/bind [id] [situs] [url]`"
+        )
+
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Error pada /list: {e}")
+        await update.message.reply_text(f"❌ Gagal mengambil daftar target: {e}")
+
+async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handler /delete [id] atau /remove [id]
+    Menghapus manhwa target dari daftar pantauan.
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "⚠️ Format salah!\nGunakan: `/delete [id]` atau `/remove [id]`\n"
+            "Contoh: `/delete 1`\n\n"
+            "💡 Ketik `/list` untuk melihat daftar nomor ID manhwa.",
+            parse_mode="Markdown"
+        )
+        return
+
+    try:
+        manhwa_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ `ID` harus berupa angka bulat! Contoh: `/delete 1`", parse_mode="Markdown")
+        return
+
+    try:
+        deleted_title = await Database.delete_manhwa(manhwa_id)
+        if deleted_title:
+            await update.message.reply_text(
+                f"🗑️ *Manhwa Berhasil Dihapus!*\n\n"
+                f"📖 Judul: *{deleted_title}*\n"
+                f"🆔 ID: `{manhwa_id}`\n\n"
+                f"_Manhwa beserta riwayat sumbernya tidak lagi dipantau oleh engine._",
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Manhwa dengan ID `{manhwa_id}` tidak ditemukan di daftar pantauan!\n"
+                f"Ketik `/list` untuk memeriksa ID yang valid.",
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        logger.error(f"Error pada /delete: {e}")
+        await update.message.reply_text(f"❌ Terjadi kesalahan saat menghapus manhwa: {e}")
+
 async def bind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler /bind [manhwa_id] [site_code] [slug_or_url]"""
     if not context.args or len(context.args) < 3:
         await update.message.reply_text(
             "⚠️ Format salah!\nGunakan: `/bind [manhwa_id] [site] [url_atau_slug]`\n"
-            "Contoh: `/bind 1 ASURA /series/solo-leveling`\n"
+            "Contoh: `/bind 1 ASURA /comics/shadow-slave-1bb35e56`\n"
             f"Situs valid: `{', '.join(sorted(VALID_SITES))}`",
             parse_mode="Markdown"
         )
@@ -142,7 +278,6 @@ async def bind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     raw_input_url = context.args[2]
-    # Ekstrak relative slug jika user memasukkan full URL
     if raw_input_url.startswith("http"):
         parsed = urlparse(raw_input_url)
         relative_slug = parsed.path
@@ -172,7 +307,7 @@ async def domain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or len(context.args) < 2:
         await update.message.reply_text(
             "⚠️ Format salah! Gunakan: `/domain [site] [new_base_url]`\n"
-            "Contoh: `/domain ASURA https://asuracomic.net`",
+            "Contoh: `/domain ASURA https://asurascans.com`",
             parse_mode="Markdown"
         )
         return
@@ -201,28 +336,6 @@ async def domain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error pada /domain: {e}")
         await update.message.reply_text(f"❌ Gagal memperbarui domain: {e}")
-
-async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler /list"""
-    try:
-        manhwas = await Database.get_tracked_manhwas()
-        if not manhwas:
-            await update.message.reply_text("Daftar pantauan masih kosong. Gunakan `/add [judul]`.", parse_mode="Markdown")
-            return
-
-        lines = ["📚 *Daftar Manhwa yang Dipantau:*\n"]
-        for m in manhwas:
-            ch_en = m.get('latest_chapter_en', 0)
-            ch_id = m.get('latest_chapter_id', 0)
-            lines.append(
-                f"• `[{m['id']}]` *{m['canonical_title']}*\n"
-                f"  └ 🇬🇧 EN: `Ch. {ch_en}` | 🇮🇩 ID: `Ch. {ch_id}`"
-            )
-
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"Error pada /list: {e}")
-        await update.message.reply_text(f"Gagal mengambil daftar: {e}")
 
 async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler /health"""
@@ -298,9 +411,11 @@ def setup_telegram_bot() -> Application:
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", start_command))
     app.add_handler(CommandHandler("add", add_command))
+    app.add_handler(CommandHandler("list", list_command))
+    app.add_handler(CommandHandler("delete", delete_command))
+    app.add_handler(CommandHandler("remove", delete_command))
     app.add_handler(CommandHandler("bind", bind_command))
     app.add_handler(CommandHandler("domain", domain_command))
-    app.add_handler(CommandHandler("list", list_command))
     app.add_handler(CommandHandler("health", health_command))
 
     return app

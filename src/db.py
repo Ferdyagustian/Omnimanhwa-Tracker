@@ -112,11 +112,46 @@ class Database:
             return [dict(r) for r in rows]
 
     @classmethod
+    async def get_tracked_manhwas_with_sources(cls) -> List[Dict[str, Any]]:
+        """
+        Mengambil daftar manhwa yang sedang dipantau beserta array sumber situs yang terikat.
+        """
+        pool = await cls.get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT m.id, m.canonical_title, m.cover_image_url, 
+                       m.latest_chapter_en, m.latest_chapter_id, m.created_at,
+                       COALESCE(array_agg(s.site_code) FILTER (WHERE s.site_code IS NOT NULL), '{}') AS sources
+                FROM manhwas m
+                LEFT JOIN manhwa_sources s ON m.id = s.manhwa_id
+                WHERE m.is_tracking = TRUE
+                GROUP BY m.id
+                ORDER BY m.canonical_title ASC
+                """
+            )
+            return [dict(r) for r in rows]
+
+    @classmethod
     async def get_manhwa_by_id(cls, manhwa_id: int) -> Optional[Dict[str, Any]]:
         pool = await cls.get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM manhwas WHERE id = $1", manhwa_id)
             return dict(row) if row else None
+
+    @classmethod
+    async def delete_manhwa(cls, manhwa_id: int) -> Optional[str]:
+        """
+        Menghapus manhwa dari pantauan berdasarkan ID (cascade menghapus aliases, sources, dan logs).
+        Mengembalikan judul kanonikal manhwa yang dihapus atau None jika tidak ditemukan.
+        """
+        pool = await cls.get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "DELETE FROM manhwas WHERE id = $1 RETURNING canonical_title",
+                manhwa_id
+            )
+            return row["canonical_title"] if row else None
 
     @classmethod
     async def get_aliases_for_manhwa(cls, manhwa_id: int) -> List[str]:
