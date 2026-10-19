@@ -40,5 +40,18 @@ class TestNormalizer(unittest.TestCase):
         self.assertIsNone(ch)
         self.assertFalse(special)
 
+    def test_parse_chapter_info_calendar_year(self):
+        # Tanpa kata kunci 'chapter/ch/ep', angka tahun kalender (1900-2099) diabaikan
+        ch, special, _ = parse_chapter_info("Special 2024")
+        self.assertIsNone(ch)
+        self.assertTrue(special)
+
+        # Jika ada kata kunci 'chapter/episode', angka tetap diekstrak dengan benar
+        ch, special, _ = parse_chapter_info("Episode 45 (2024)")
+        self.assertEqual(ch, 45.0)
+
+        ch, special, _ = parse_chapter_info("Chapter 2000")
+        self.assertEqual(ch, 2000.0)
+
 if __name__ == "__main__":
     unittest.main()

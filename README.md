@@ -1,32 +1,32 @@
 # OmniManhwa Tracker Engine (OMTE) v1.2
 
-> **Sistem Pelacak Rilis Chapter Manhwa 24/7, Multi-Site Auto-Discovery, & AI-Assisted Alias Resolver.**  
-> Dirancang dengan arsitektur hemat sumber daya (*battle-tested* untuk lingkungan Cloud VM 1 GB RAM & 4 GB Swap).
+> **24/7 Manhwa Chapter Release Tracker, Multi-Site Auto-Discovery, & AI-Assisted Alias Resolver.**  
+> Engineered with a lightweight, resource-efficient architecture (*battle-tested* on 1 GB RAM & 4 GB Swap Cloud VMs).
 
 ---
 
-##  Fitur Utama
+## ✨ Key Features
 
-- **Multi-Site Concurrent Auto-Discovery**: Pendaftaran target cukup dengan satu perintah `/add [judul]`. Engine memindai seluruh situs (MangaDex, Mgeko, VortexScans, AsuraScans, Komiku) secara paralel dan mengaitkan seluruh sumber yang cocok secara otomatis.
-- **3-Tier Entity Resolution**: Pipeline pencocokan judul cerdas berbasis *Exact Normalized Match*, *RapidFuzz Token Scoring*, dan *Google Gemini Flash AI Disambiguator* untuk variasi judul bahasa Korea, Inggris, dan Indonesia.
+- **Multi-Site Concurrent Auto-Discovery**: Register targets with a single `/add [title]` command. The engine concurrently scans all supported sites (MangaDex, Mgeko, VortexScans, AsuraScans, Komiku) and automatically binds all matching sources.
+- **3-Tier Entity Resolution**: Intelligent title-matching pipeline powered by *Exact Normalized Match*, *RapidFuzz Token Scoring*, and a *Google Gemini Flash AI Disambiguator* to accurately resolve Korean, English, and Indonesian title variations.
 - **Smart Chapter Priority & Multi-Site Deduplication**: 
-  - Membandingkan progres chapter antar sumber yang terikat.
-  - Memprioritaskan sumber rilis tercepat/terdepan dan mengabaikan chapter kadaluwarsa.
-  - Mendeduplikasi notifikasi secara global per `(manhwa_id, language, chapter_num)`, sehingga rilis nomor chapter yang sama dari situs lain tidak menimbulkan notifikasi duplikat.
-  - Pemisahan pemantauan rilis Bahasa Inggris (`EN`) dan Bahasa Indonesia (`ID`).
-- **Anti-Bot & Etika Jaringan**:
-  - Polling berkala 20 menit dengan **Random Jitter** (10–35 detik).
-  - Rotasi User-Agent Chrome modern dinamis.
-  - TLS impersonation Chrome via `curl_cffi` hemat memori (tanpa headless browser berat).
+  - Compares chapter progress across all bound sources.
+  - Prioritizes the fastest/most ahead release source and ignores outdated chapters.
+  - Globally deduplicates notifications per `(manhwa_id, language, chapter_num)`, preventing duplicate alerts when other sites release the same chapter later.
+  - Independent release tracking for English (`EN`) and Indonesian (`ID`) translations.
+- **Anti-Bot Evasion & Network Etiquette**:
+  - 20-minute periodic polling interval with **Random Jitter** (10–35 seconds).
+  - Dynamic modern Chrome User-Agent rotation.
+  - Memory-efficient Chrome TLS fingerprint impersonation via `curl_cffi` (no heavy headless browsers required).
 - **Data Hygiene & Health Monitoring**:
-  - Pembersihan otomatis (*data retention*) untuk log rilis yang berusia lebih dari 30 hari.
-  - Pemantauan real-time status RAM, Swap, dan database via perintah `/health`.
+  - Automated data retention cleanup for release logs older than 30 days.
+  - Real-time RAM, Swap, and database health monitoring via the `/health` command.
 
 ---
 
-## 🏛️ Matriks Sumber Data (Adapters)
+## 🏛️ Data Source Matrix (Adapters)
 
-| Situs | Kode | Bahasa | Prioritas Polling | Metode Akses |
+| Site | Code | Language | Polling Priority | Access Method |
 | :--- | :---: | :---: | :---: | :--- |
 | **Mgeko** | `MGEKO` | EN | 1 | `curl_cffi` + Selectolax HTML Parser |
 | **MangaDex** | `MANGADEX` | MULTI | 2 | Official REST API (`api.mangadex.org`) |
@@ -36,80 +36,80 @@
 
 ---
 
-## 🤖 Perintah Telegram Bot
+## 🤖 Telegram Bot Commands
 
-| Perintah | Deskripsi | Contoh |
+| Command | Description | Example |
 | :--- | :--- | :--- |
-| `/add [judul / URL]` | Memindai seluruh website dan mendaftarkan manhwa ke target pantauan | `/add Solo Leveling` |
-| `/list` | Menampilkan seluruh target manhwa, sumber terikat, dan status rilis terakhir | `/list` |
-| `/bind [id] [situs] [slug]` | Menautkan link atau slug sumber tertentu secara manual | `/bind 1 KOMIKU /manga/solo-leveling` |
-| `/delete [id]` | Menghapus target manhwa dan seluruh riwayat sumbernya | `/delete 1` |
-| `/domain [situs] [new_url]`| Memperbarui alamat base URL jika situs melakukan redirect domain | `/domain ASURA https://asuracomic.net` |
-| `/health` | Memeriksa beban CPU/RAM, Swap Memory, dan status koneksi database | `/health` |
+| `/add [title / URL]` | Scans all supported websites and adds the manhwa to the watchlist | `/add Solo Leveling` |
+| `/list` | Displays all tracked manhwa, bound sources, and latest release statuses | `/list` |
+| `/bind [id] [site] [slug]` | Manually binds a specific source URL or slug to an existing target | `/bind 1 KOMIKU /manga/solo-leveling` |
+| `/delete [id]` | Deletes a tracked manhwa and all associated source history | `/delete 1` |
+| `/domain [site] [new_url]`| Updates the base URL if a source site changes or redirects its domain | `/domain ASURA https://asuracomic.net` |
+| `/health` | Checks CPU/RAM load, Swap memory usage, and database connection status | `/health` |
 
 ---
 
-##  Panduan Menjalankan
+## 🚀 Getting Started
 
-### 1. Menjalankan via Docker Compose (Rekomendasi Produksi)
+### 1. Run via Docker Compose (Recommended for Production)
 
 ```bash
-# 1. Salin template konfigurasi environment
+# 1. Copy the environment configuration template
 cp .env.example .env
 
-# 2. Isi TELEGRAM_BOT_TOKEN dan TELEGRAM_ADMIN_CHAT_ID pada file .env
+# 2. Fill in TELEGRAM_BOT_TOKEN and TELEGRAM_ADMIN_CHAT_ID in the .env file
 nano .env
 
-# 3. Jalankan container dengan pembatasan memori otomatis
+# 3. Start the container with automated memory limits
 docker compose up -d --build
 
-# 4. Periksa log container
+# 4. Monitor container logs
 docker compose logs -f omte-core
 ```
 
-### Memperbarui / Redeploy Aplikasi di Server
+### Updating / Redeploying on the Server
 
 ```bash
 git pull origin main
 docker compose up -d --build omte-core
 ```
 
-### 2. Menjalankan Secara Lokal (Development / SQLite Fallback)
+### 2. Run Locally (Development / SQLite Fallback)
 
 ```bash
-# 1. Pasang dependensi
+# 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Jalankan test suite otomatis
+# 2. Run the automated test suite
 python -m unittest discover tests
 
-# 3. Jalankan engine utama
+# 3. Start the core engine
 python -m src.main
 ```
 
 ---
 
-## 📁 Struktur Direktori
+## 📁 Directory Structure
 
 ```text
 omnimanhwa/
 ├── src/
-│   ├── adapters/          # Modul scraper per website (MangaDex, Asura, Mgeko, Vortex, Komiku)
+│   ├── adapters/          # Site-specific scraper modules (MangaDex, Asura, Mgeko, Vortex, Komiku)
 │   ├── bot/               # Telegram bot handlers & notification dispatcher
 │   ├── resolver/          # 3-tier matcher & Gemini semantic disambiguator
-│   ├── config.py          # Konfigurasi aplikasi & environment variables
-│   ├── db.py              # Layer database (PostgreSQL asyncpg + SQLite fallback)
-│   ├── main.py            # Entry point & background tracker worker loop
-│   └── normalizer.py      # Ekstraksi angka chapter, regex, & title normalizer
-├── tests/                 # Unit tests (25 test cases lengkap)
-├── docker-compose.yml     # Orkestrasi Docker (dengan mem_limit ketat)
-├── Dockerfile             # Multi-stage Docker image
-├── init.sql               # Skema PostgreSQL & indeks retensi
-└── requirements.txt       # Dependensi Python minimal
+│   ├── config.py          # Application configuration & environment variables
+│   ├── db.py              # Database layer (PostgreSQL asyncpg + SQLite fallback)
+│   ├── main.py            # Application entry point & background tracker worker loop
+│   └── normalizer.py      # Chapter number extraction, regex rules, & title normalizer
+├── tests/                 # Unit tests (25 comprehensive test cases)
+├── docker-compose.yml     # Docker orchestration (with strict mem_limit)
+├── Dockerfile             # Multi-stage Docker image build
+├── init.sql               # PostgreSQL schema & retention indexes
+└── requirements.txt       # Minimal Python dependencies
 ```
 
 ---
 
-## 📄 Lisensi
+## 📄 License
 
-Proyek ini dilisensikan di bawah lisensi MIT.
+This project is licensed under the MIT License.

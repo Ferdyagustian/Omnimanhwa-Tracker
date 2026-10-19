@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 from curl_cffi.requests import AsyncSession
 from selectolax.lexbor import LexborHTMLParser as HTMLParser
 from src.db import Database
+from src.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +48,9 @@ class BaseScraper:
         await asyncio.sleep(random.uniform(1.0, 2.5))
 
         proxies = {"http": self.proxy_url, "https": self.proxy_url} if self.proxy_url else None
-        curl_options = {}
-        if self.site_code == "MGEKO" and not self.proxy_url:
-            from curl_cffi import CurlOpt
-            curl_options[CurlOpt.RESOLVE] = ["www.mgeko.cc:443:104.21.29.59", "mgeko.cc:443:104.21.29.59"]
 
         try:
-            async with AsyncSession(impersonate="chrome124", proxies=proxies, verify=False, curl_options=curl_options or None) as session:
+            async with AsyncSession(impersonate="chrome124", proxies=proxies, verify=Config.SSL_VERIFY) as session:
                 response = await session.get(
                     url,
                     headers=headers,

@@ -1,6 +1,7 @@
 import io
 import logging
 import asyncio
+from functools import wraps
 from typing import Optional
 from urllib.parse import urlparse
 import aiohttp
@@ -53,6 +54,32 @@ async def stream_image(url: str, referer: Optional[str] = None) -> Optional[byte
         logger.error(f"Gagal stream gambar dari {url}: {e}")
     return None
 
+def is_authorized(update: Update) -> bool:
+    """Memeriksa apakah pengirim perintah adalah admin yang sah"""
+    if not Config.TELEGRAM_ADMIN_CHAT_ID:
+        return True
+    chat = update.effective_chat
+    if not chat:
+        return False
+    return str(chat.id).strip() == str(Config.TELEGRAM_ADMIN_CHAT_ID).strip()
+
+def admin_only(func):
+    """Decorator pembatas hak akses hanya untuk admin"""
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if not is_authorized(update):
+            if update.callback_query:
+                await update.callback_query.answer("⛔ Akses ditolak: Anda bukan pengelola bot ini.", show_alert=True)
+            elif update.message:
+                await update.message.reply_text(
+                    "⛔ *Akses Ditolak*\n────────────────────────\nAnda tidak memiliki izin untuk mengelola bot ini.",
+                    parse_mode="Markdown"
+                )
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
+@admin_only
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler perintah /start dan /help dengan tata letak editorial Taste"""
     msg = (
@@ -70,6 +97,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
 
+@admin_only
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handler /add [judul atau URL]
@@ -373,6 +401,7 @@ def render_manhwa_list(manhwas: list, page: int = 1) -> tuple[str, Optional[Inli
 
     return "\n".join(lines), InlineKeyboardMarkup(keyboard) if keyboard else None
 
+@admin_only
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handler /list
@@ -389,6 +418,7 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error pada /list: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Gagal mengambil daftar target: {e}")
 
+@admin_only
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handler /delete [id] atau /remove [id]
@@ -429,6 +459,7 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error pada /delete: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Terjadi kesalahan saat menghapus manhwa: {e}")
 
+@admin_only
 async def bind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler /bind [manhwa_id] [site_code] [slug_or_url]"""
     if not context.args or len(context.args) < 3:
@@ -479,6 +510,7 @@ async def bind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error pada /bind: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Gagal menautkan sumber: {e}")
 
+@admin_only
 async def domain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler /domain [site_code] [new_base_url]"""
     if not context.args or len(context.args) < 2:
@@ -514,6 +546,7 @@ async def domain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error pada /domain: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Gagal memperbarui domain: {e}")
 
+@admin_only
 async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler /health"""
     try:
@@ -584,6 +617,7 @@ async def send_release_notification(
             reply_markup=reply_markup
         )
 
+@admin_only
 async def quick_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler pesan tombol navigasi cepat (Reply Keyboard)"""
     text = (update.message.text or "").strip()
@@ -606,6 +640,7 @@ async def quick_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     elif text == "❓ Panduan":
         await start_command(update, context)
 
+@admin_only
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler aksi inline button: konfirmasi hapus dua tahap"""
     query = update.callback_query

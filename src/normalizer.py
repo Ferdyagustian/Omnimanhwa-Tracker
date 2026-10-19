@@ -41,9 +41,9 @@ def parse_chapter_info(title_or_text: str) -> Tuple[Optional[float], bool, str]:
     
     text = title_or_text.strip()
     
-    # Deteksi Season Baru atau Side Story / Prologue
+    # Deteksi Season Baru atau Side Story / Prologue / Special
     is_special = bool(
-        re.search(r"\b(season\s*\d+|s\d+|side\s*story|extra|prologue|epilogue|end|finale)\b", text, re.IGNORECASE)
+        re.search(r"\b(season\s*\d+|s\d+|side\s*story|extra|special|prologue|epilogue|end|finale)\b", text, re.IGNORECASE)
     )
 
     # 1. Pola dash-decimal pada URL slug, misal: chapter-199-5 atau ch-89-5
@@ -70,7 +70,11 @@ def parse_chapter_info(title_or_text: str) -> Tuple[Optional[float], bool, str]:
     fallback_match = re.search(r"\b(\d+(?:\.\d+)?)\b", text)
     if fallback_match:
         try:
-            return float(fallback_match.group(1)), is_special, text
+            val = float(fallback_match.group(1))
+            # Abaikan jika berupa tahun kalender (1900 - 2099) tanpa kata kunci chapter
+            if 1900 <= val <= 2099 and val.is_integer():
+                return None, is_special, text
+            return val, is_special, text
         except ValueError:
             pass
 

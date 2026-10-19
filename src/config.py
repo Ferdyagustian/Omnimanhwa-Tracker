@@ -21,6 +21,7 @@ class Config:
 
     # Network & Proxy
     PROXY_URL = os.getenv("PROXY_URL", "")
+    SSL_VERIFY = os.getenv("SSL_VERIFY", "true").lower() in ("true", "1", "yes")
 
     # Engine
     POLL_INTERVAL_MINUTES = int(os.getenv("POLL_INTERVAL_MINUTES", "20"))

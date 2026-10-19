@@ -109,5 +109,31 @@ class TestTelegramBot(unittest.TestCase):
         text_clamp, markup_clamp = render_manhwa_list(mock_manhwas, page=99)
         self.assertIn("Hal 3/3", text_clamp)
 
+    def test_is_authorized(self):
+        from unittest.mock import MagicMock
+        from src.config import Config
+        from src.bot.telegram_bot import is_authorized
+
+        # Mock update
+        update_admin = MagicMock()
+        update_admin.effective_chat.id = 123456
+
+        update_stranger = MagicMock()
+        update_stranger.effective_chat.id = 999999
+
+        # Case 1: TELEGRAM_ADMIN_CHAT_ID kosong -> selalu True
+        old_admin = Config.TELEGRAM_ADMIN_CHAT_ID
+        try:
+            Config.TELEGRAM_ADMIN_CHAT_ID = ""
+            self.assertTrue(is_authorized(update_admin))
+            self.assertTrue(is_authorized(update_stranger))
+
+            # Case 2: TELEGRAM_ADMIN_CHAT_ID diisi -> hanya admin yang lolos
+            Config.TELEGRAM_ADMIN_CHAT_ID = "123456"
+            self.assertTrue(is_authorized(update_admin))
+            self.assertFalse(is_authorized(update_stranger))
+        finally:
+            Config.TELEGRAM_ADMIN_CHAT_ID = old_admin
+
 if __name__ == "__main__":
     unittest.main()

@@ -88,16 +88,22 @@ async def tracker_worker_loop(bot):
             site_map = {s["site_code"]: s for s in site_configs_list}
 
             manhwas = await Database.get_tracked_manhwas()
-            for m in manhwas:
-                sources = await Database.get_manhwa_sources(m["id"])
-                # Urutkan sumber berdasarkan urutan prioritas: MGEKO -> MANGADEX -> VORTEX -> ASURA -> KOMIKU
-                sources.sort(key=lambda s: SITE_PRIORITY.get(s["site_code"], 99))
-                for s in sources:
-                    site_cfg = site_map.get(s["site_code"])
-                    if site_cfg and site_cfg.get("is_active", True):
-                        await poll_single_source(bot, m, dict(s), site_cfg)
-                        # Jitter antar request
-                        await asyncio.sleep(random.uniform(1.5, 3.5))
+            sem = asyncio.Semaphore(3)
+
+            async def poll_manhwa(m):
+                async with sem:
+                    sources = await Database.get_manhwa_sources(m["id"])
+                    # Urutkan sumber berdasarkan urutan prioritas: MGEKO -> MANGADEX -> VORTEX -> ASURA -> KOMIKU
+                    sources.sort(key=lambda s: SITE_PRIORITY.get(s["site_code"], 99))
+                    for s in sources:
+                        site_cfg = site_map.get(s["site_code"])
+                        if site_cfg and site_cfg.get("is_active", True):
+                            await poll_single_source(bot, m, dict(s), site_cfg)
+                            # Jitter antar request
+                            await asyncio.sleep(random.uniform(1.0, 2.5))
+
+            if manhwas:
+                await asyncio.gather(*(poll_manhwa(m) for m in manhwas), return_exceptions=True)
 
             # Retensi Data berkala: bersihkan log notifikasi > 30 hari
             try:
