@@ -5,7 +5,7 @@
 
 ---
 
-## 🌟 Fitur Utama
+##  Fitur Utama
 
 - **Multi-Site Concurrent Auto-Discovery**: Pendaftaran target cukup dengan satu perintah `/add [judul]`. Engine memindai seluruh situs (MangaDex, Mgeko, VortexScans, AsuraScans, Komiku) secara paralel dan mengaitkan seluruh sumber yang cocok secara otomatis.
 - **3-Tier Entity Resolution**: Pipeline pencocokan judul cerdas berbasis *Exact Normalized Match*, *RapidFuzz Token Scoring*, dan *Google Gemini Flash AI Disambiguator* untuk variasi judul bahasa Korea, Inggris, dan Indonesia.
@@ -49,7 +49,7 @@
 
 ---
 
-## 🚀 Panduan Menjalankan
+##  Panduan Menjalankan
 
 ### 1. Menjalankan via Docker Compose (Rekomendasi Produksi)
 

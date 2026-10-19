@@ -322,47 +322,69 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(caption, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
 
 
+PAGE_SIZE = 5
+
+def render_manhwa_list(manhwas: list, page: int = 1) -> tuple[str, Optional[InlineKeyboardMarkup]]:
+    """Merender tampilan daftar manhwa berhalaman (paginated) agar tidak melebihi batas 4096 karakter Telegram."""
+    total = len(manhwas)
+    if not total:
+        return (
+            "📭 *Daftar target pantauan masih kosong.*\n\n"
+            "Gunakan tombol *➕ Tambah Komik* atau ketik `/add [judul]` untuk mulai melacak.",
+            None
+        )
+
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(1, min(page, total_pages))
+    start_idx = (page - 1) * PAGE_SIZE
+    page_items = manhwas[start_idx:start_idx + PAGE_SIZE]
+
+    lines = [
+        f"📚 *TARGET PANTAUAN* `({total} Judul │ Hal {page}/{total_pages})`",
+        "────────────────────────"
+    ]
+    del_buttons = []
+    for m in page_items:
+        ch_en = m.get('latest_chapter_en', 0)
+        ch_id = m.get('latest_chapter_id', 0)
+        sources_list = m.get('sources') or []
+        sources_str = " · ".join(sources_list) if sources_list else "Belum terikat"
+
+        lines.append(
+            f"#{m['id']} *{m['canonical_title']}*\n"
+            f"├ 🌐 `{sources_str}`\n"
+            f"└ 🇬🇧 `Ch. {ch_en}` │ 🇮🇩 `Ch. {ch_id}`\n"
+        )
+        del_buttons.append(InlineKeyboardButton(f"🗑️ #{m['id']}", callback_data=f"del_ask:{m['id']}"))
+
+    lines.append("────────────────────────")
+    lines.append("💡 _Ketuk tombol di bawah untuk menghapus target._")
+
+    keyboard = [del_buttons[i:i+3] for i in range(0, len(del_buttons), 3)]
+
+    if total_pages > 1:
+        nav_row = []
+        if page > 1:
+            nav_row.append(InlineKeyboardButton("⬅️ Sebelumnya", callback_data=f"list_page:{page - 1}"))
+        nav_row.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav_row.append(InlineKeyboardButton("Selanjutnya ➡️", callback_data=f"list_page:{page + 1}"))
+        keyboard.append(nav_row)
+
+    return "\n".join(lines), InlineKeyboardMarkup(keyboard) if keyboard else None
+
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handler /list
-    Menampilkan semua manhwa yang sedang ditargetkan dengan kartu editorial Taste & tombol aksi cepat.
+    Menampilkan semua manhwa yang sedang ditargetkan dengan pagination kartu editorial Taste & tombol aksi cepat.
     """
     try:
         manhwas = await Database.get_tracked_manhwas_with_sources()
+        text, reply_markup = render_manhwa_list(manhwas, page=1)
         if not manhwas:
-            await update.message.reply_text(
-                "📭 *Daftar target pantauan masih kosong.*\n\n"
-                "Gunakan tombol *➕ Tambah Komik* atau ketik `/add [judul]` untuk mulai melacak.",
-                parse_mode="Markdown",
-                reply_markup=MAIN_KEYBOARD
-            )
-            return
-
-        lines = [
-            f"📚 *TARGET PANTAUAN* `({len(manhwas)})`",
-            "────────────────────────"
-        ]
-        del_buttons = []
-        for m in manhwas:
-            ch_en = m.get('latest_chapter_en', 0)
-            ch_id = m.get('latest_chapter_id', 0)
-            sources_list = m.get('sources') or []
-            sources_str = " · ".join(sources_list) if sources_list else "Belum terikat"
-
-            lines.append(
-                f"#{m['id']} *{m['canonical_title']}*\n"
-                f"├ 🌐 `{sources_str}`\n"
-                f"└ 🇬🇧 `Ch. {ch_en}` │ 🇮🇩 `Ch. {ch_id}`\n"
-            )
-            del_buttons.append(InlineKeyboardButton(f"🗑️ #{m['id']}", callback_data=f"del_ask:{m['id']}"))
-
-        lines.append("────────────────────────")
-        lines.append("💡 _Ketuk tombol di bawah untuk menghapus target tanpa mengetik._")
-
-        keyboard = [del_buttons[i:i+3] for i in range(0, len(del_buttons), 3)]
-        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
-
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=reply_markup)
+            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+        else:
+            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Error pada /list: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Gagal mengambil daftar target: {e}")
@@ -612,16 +634,30 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Error pada del_ask: {e}")
             await query.edit_message_text(f"❌ Terjadi kesalahan: {e}")
 
+    elif data.startswith("list_page:"):
+        try:
+            page = int(data.split(":")[1])
+            manhwas = await Database.get_tracked_manhwas_with_sources()
+            text, reply_markup = render_manhwa_list(manhwas, page=page)
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+        except Exception as e:
+            logger.error(f"Error on list_page: {e}")
+
+    elif data == "noop":
+        pass
+
     elif data.startswith("del_yes:"):
         try:
             m_id = int(data.split(":")[1])
             deleted_title = await Database.delete_manhwa(m_id)
             if deleted_title:
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton("📚 Kembali ke Daftar", callback_data="list_page:1")]])
                 await query.edit_message_text(
                     f"🗑️ *Target Berhasil Dihapus*\n"
                     f"────────────────────────\n"
                     f"*{deleted_title}* (`#{m_id}`) tidak lagi dipantau oleh engine.",
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    reply_markup=kb
                 )
             else:
                 await query.edit_message_text(f"❌ Target `#{m_id}` tidak ditemukan.", parse_mode="Markdown")
@@ -630,7 +666,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text(f"❌ Gagal menghapus target: {e}")
 
     elif data == "del_cancel":
-        await query.edit_message_text("👌 *Penghapusan dibatalkan.*", parse_mode="Markdown")
+        manhwas = await Database.get_tracked_manhwas_with_sources()
+        text, reply_markup = render_manhwa_list(manhwas, page=1)
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
 
 def setup_telegram_bot() -> Application:
     """Menginisialisasi Telegram Bot Application"""

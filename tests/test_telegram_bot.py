@@ -54,5 +54,60 @@ class TestTelegramBot(unittest.TestCase):
         self.assertEqual(row1_texts, ["📚 Daftar Pantauan", "➕ Tambah Komik"])
         self.assertEqual(row2_texts, ["🩺 Status Server", "❓ Panduan"])
 
+    def test_render_manhwa_list_empty(self):
+        from src.bot.telegram_bot import render_manhwa_list
+        text, markup = render_manhwa_list([], page=1)
+        self.assertIn("Daftar target pantauan masih kosong", text)
+        self.assertIsNone(markup)
+
+    def test_render_manhwa_list_single_page(self):
+        from src.bot.telegram_bot import render_manhwa_list
+        mock_manhwas = [
+            {"id": i, "canonical_title": f"Manga {i}", "sources": ["ASURA"], "latest_chapter_en": 10, "latest_chapter_id": 5}
+            for i in range(1, 4)
+        ]
+        text, markup = render_manhwa_list(mock_manhwas, page=1)
+        self.assertIn("Hal 1/1", text)
+        self.assertIn("Manga 1", text)
+        self.assertIn("Manga 3", text)
+        # 3 delete buttons in 1 row, no pagination nav row
+        self.assertEqual(len(markup.inline_keyboard), 1)
+        self.assertEqual(len(markup.inline_keyboard[0]), 3)
+
+    def test_render_manhwa_list_pagination(self):
+        from src.bot.telegram_bot import render_manhwa_list
+        mock_manhwas = [
+            {"id": i, "canonical_title": f"Manga {i}", "sources": ["ASURA"], "latest_chapter_en": 10, "latest_chapter_id": 5}
+            for i in range(1, 13)
+        ]  # 12 items -> 3 pages of (5, 5, 2)
+        # Page 1
+        text1, markup1 = render_manhwa_list(mock_manhwas, page=1)
+        self.assertIn("Hal 1/3", text1)
+        self.assertIn("Manga 1", text1)
+        self.assertIn("Manga 5", text1)
+        self.assertNotIn("Manga 6", text1)
+        nav_buttons1 = [b.text for b in markup1.inline_keyboard[-1]]
+        self.assertEqual(nav_buttons1, ["📄 1/3", "Selanjutnya ➡️"])
+
+        # Page 2
+        text2, markup2 = render_manhwa_list(mock_manhwas, page=2)
+        self.assertIn("Hal 2/3", text2)
+        self.assertIn("Manga 6", text2)
+        self.assertIn("Manga 10", text2)
+        nav_buttons2 = [b.text for b in markup2.inline_keyboard[-1]]
+        self.assertEqual(nav_buttons2, ["⬅️ Sebelumnya", "📄 2/3", "Selanjutnya ➡️"])
+
+        # Page 3 (Last page)
+        text3, markup3 = render_manhwa_list(mock_manhwas, page=3)
+        self.assertIn("Hal 3/3", text3)
+        self.assertIn("Manga 11", text3)
+        self.assertIn("Manga 12", text3)
+        nav_buttons3 = [b.text for b in markup3.inline_keyboard[-1]]
+        self.assertEqual(nav_buttons3, ["⬅️ Sebelumnya", "📄 3/3"])
+
+        # Clamping test: page 99 should clamp to page 3
+        text_clamp, markup_clamp = render_manhwa_list(mock_manhwas, page=99)
+        self.assertIn("Hal 3/3", text_clamp)
+
 if __name__ == "__main__":
     unittest.main()
