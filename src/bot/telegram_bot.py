@@ -88,12 +88,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Sistem Pelacak Chapter Manhwa 24/7 (EN/ID)\n\n"
         "📌 *Navigasi & Perintah:*\n"
         "• `/add [judul/URL]` — Tambah target pantauan\n"
-        "• `/list` — Lihat daftar komik & aksi cepat\n"
+        "• `/list [hal/judul]` — Lihat daftar komik & pencarian\n"
+        "• `/check [id]` — Cek status rilis terakhir komik\n"
         "• `/delete [id]` — Hapus komik dari target\n"
         "• `/bind [id] [situs] [slug]` — Tautkan sumber manual\n"
         "• `/domain [situs] [url]` — Perbarui domain situs\n"
         "• `/health` — Metrik server & status engine\n\n"
-        "💡 _Contoh:_ `/add Solo Leveling`"
+        "💡 _Contoh:_ `/add Solo Leveling` atau `/list solo`"
     )
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
 
@@ -352,10 +353,16 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 PAGE_SIZE = 5
 
-def render_manhwa_list(manhwas: list, page: int = 1) -> tuple[str, Optional[InlineKeyboardMarkup]]:
+def render_manhwa_list(manhwas: list, page: int = 1, filter_query: str = "") -> tuple[str, Optional[InlineKeyboardMarkup]]:
     """Merender tampilan daftar manhwa berhalaman (paginated) agar tidak melebihi batas 4096 karakter Telegram."""
     total = len(manhwas)
     if not total:
+        if filter_query:
+            return (
+                f"🔍 *Tidak ditemukan manhwa dengan kata kunci:* `'{filter_query}'`\n\n"
+                "Ketik `/list` untuk melihat semua target pantauan.",
+                None
+            )
         return (
             "📭 *Daftar target pantauan masih kosong.*\n\n"
             "Gunakan tombol *➕ Tambah Komik* atau ketik `/add [judul]` untuk mulai melacak.",
@@ -367,8 +374,9 @@ def render_manhwa_list(manhwas: list, page: int = 1) -> tuple[str, Optional[Inli
     start_idx = (page - 1) * PAGE_SIZE
     page_items = manhwas[start_idx:start_idx + PAGE_SIZE]
 
+    header = f"🔍 *HASIL PENCARIAN:* `'{filter_query}'`" if filter_query else "📚 *TARGET PANTAUAN*"
     lines = [
-        f"📚 *TARGET PANTAUAN* `({total} Judul │ Hal {page}/{total_pages})`",
+        f"{header} `({total} Judul │ Hal {page}/{total_pages})`",
         "────────────────────────"
     ]
     del_buttons = []
@@ -392,11 +400,12 @@ def render_manhwa_list(manhwas: list, page: int = 1) -> tuple[str, Optional[Inli
 
     if total_pages > 1:
         nav_row = []
+        suffix = f":{filter_query[:20]}" if filter_query else ""
         if page > 1:
-            nav_row.append(InlineKeyboardButton("⬅️ Sebelumnya", callback_data=f"list_page:{page - 1}"))
+            nav_row.append(InlineKeyboardButton("⬅️ Sebelumnya", callback_data=f"list_page:{page - 1}{suffix}"))
         nav_row.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop"))
         if page < total_pages:
-            nav_row.append(InlineKeyboardButton("Selanjutnya ➡️", callback_data=f"list_page:{page + 1}"))
+            nav_row.append(InlineKeyboardButton("Selanjutnya ➡️", callback_data=f"list_page:{page + 1}{suffix}"))
         keyboard.append(nav_row)
 
     return "\n".join(lines), InlineKeyboardMarkup(keyboard) if keyboard else None
@@ -404,19 +413,105 @@ def render_manhwa_list(manhwas: list, page: int = 1) -> tuple[str, Optional[Inli
 @admin_only
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handler /list
+    Handler /list [halaman | keyword]
     Menampilkan semua manhwa yang sedang ditargetkan dengan pagination kartu editorial Taste & tombol aksi cepat.
+    Mendukung lompat ke nomor halaman (/list 5) atau pencarian judul (/list solo).
     """
     try:
         manhwas = await Database.get_tracked_manhwas_with_sources()
-        text, reply_markup = render_manhwa_list(manhwas, page=1)
-        if not manhwas:
+        target_page = 1
+        filter_query = ""
+
+        if context.args:
+            arg = " ".join(context.args).strip()
+            if arg.isdigit():
+                target_page = int(arg)
+            else:
+                filter_query = arg
+                manhwas = [m for m in manhwas if filter_query.lower() in m["canonical_title"].lower()]
+
+        text, reply_markup = render_manhwa_list(manhwas, page=target_page, filter_query=filter_query)
+        if not manhwas and not filter_query:
             await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
         else:
             await update.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Error pada /list: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Gagal mengambil daftar target: {e}")
+
+@admin_only
+async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handler /check [id]
+    Mengecek kapan manhwa terakhir kali dirilis chapternya, pada tanggal berapa, 
+    dan status sumber yang terikat.
+    """
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text(
+            "ℹ️ *Format salah!*\nGunakan: `/check [id_manhwa]`\nContoh: `/check 1`",
+            parse_mode="Markdown"
+        )
+        return
+
+    m_id = int(context.args[0])
+    status_msg = await update.message.reply_text(f"🔍 *Mengecek status Manhwa #{m_id}...*", parse_mode="Markdown")
+
+    try:
+        manhwa = await Database.get_manhwa_by_id(m_id)
+        if not manhwa:
+            await status_msg.edit_text(f"❌ Manhwa dengan ID `#{m_id}` tidak ditemukan dalam daftar pantauan.", parse_mode="Markdown")
+            return
+
+        title = manhwa["canonical_title"]
+        ch_en = manhwa.get("latest_chapter_en", 0)
+        ch_id = manhwa.get("latest_chapter_id", 0)
+
+        # Ambil data rilis terakhir dari database
+        latest_rel = await Database.get_latest_release_info(m_id)
+
+        # Ambil daftar sumber yang terikat
+        sources = await Database.get_manhwa_sources(m_id)
+        sources_str = ", ".join(f"`{s['site_code']}`" for s in sources) if sources else "Belum terikat"
+
+        if latest_rel:
+            rel_site = latest_rel.get("site_code", "-")
+            rel_lang = latest_rel.get("language", "-")
+            rel_num = latest_rel.get("chapter_num", "-")
+            rel_title = latest_rel.get("chapter_raw_title", f"Chapter {rel_num}")
+            rel_url = latest_rel.get("chapter_url", "")
+            raw_time = latest_rel.get("notified_at")
+            if hasattr(raw_time, "strftime"):
+                date_str = raw_time.strftime("%d %b %Y, %H:%M WIB")
+            elif raw_time:
+                date_str = str(raw_time)[:16]
+            else:
+                date_str = "Baru saja"
+
+            release_section = (
+                f"🕒 *Rilis Terakhir Terdeteksi:*\n"
+                f"├ *Chapter:* `{rel_title}` (`{rel_site}` - `{rel_lang}`)\n"
+                f"├ *Tanggal:* `{date_str}`\n"
+                f"└ *Tautan:* [Buka Chapter]({rel_url})\n"
+            )
+        else:
+            release_section = "🕒 *Rilis Terakhir Terdeteksi:*\n└ _Belum ada log rilis chapter yang terekam._\n"
+
+        response_text = (
+            f"📖 *STATUS TARGET: {title}*\n"
+            f"🆔 *ID Target:* `#{m_id}`\n"
+            f"────────────────────────\n"
+            f"🇬🇧 *Progres EN:* `Ch. {ch_en}`\n"
+            f"🇮🇩 *Progres ID:* `Ch. {ch_id}`\n\n"
+            f"{release_section}"
+            f"────────────────────────\n"
+            f"🌐 *Sumber Terikat:* {sources_str}\n"
+            f"⚡ _Status: Siap dipantau 24/7._"
+        )
+
+        await status_msg.edit_text(response_text, parse_mode="Markdown", disable_web_page_preview=True)
+    except Exception as e:
+        logger.error(f"Error pada /check: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Terjadi kesalahan saat memeriksa target: {e}")
 
 @admin_only
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -671,9 +766,13 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data.startswith("list_page:"):
         try:
-            page = int(data.split(":")[1])
+            parts = data.split(":")
+            page = int(parts[1])
+            filter_query = parts[2] if len(parts) > 2 else ""
             manhwas = await Database.get_tracked_manhwas_with_sources()
-            text, reply_markup = render_manhwa_list(manhwas, page=page)
+            if filter_query:
+                manhwas = [m for m in manhwas if filter_query.lower() in m["canonical_title"].lower()]
+            text, reply_markup = render_manhwa_list(manhwas, page=page, filter_query=filter_query)
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Error on list_page: {e}")
@@ -717,6 +816,7 @@ def setup_telegram_bot() -> Application:
     app.add_handler(CommandHandler("help", start_command))
     app.add_handler(CommandHandler("add", add_command))
     app.add_handler(CommandHandler("list", list_command))
+    app.add_handler(CommandHandler("check", check_command))
     app.add_handler(CommandHandler("delete", delete_command))
     app.add_handler(CommandHandler("remove", delete_command))
     app.add_handler(CommandHandler("bind", bind_command))

@@ -563,3 +563,28 @@ class Database:
                 except Exception:
                     return 0
 
+    @classmethod
+    async def get_latest_release_info(cls, manhwa_id: int) -> Optional[Dict[str, Any]]:
+        """Mengambil informasi rilis chapter paling terakhir untuk manhwa tertentu."""
+        await cls.get_pool()
+        query = """
+            SELECT id, manhwa_id, site_code, language, chapter_num, 
+                   chapter_raw_title, chapter_url, notified_at
+            FROM chapter_logs
+            WHERE manhwa_id = ?
+            ORDER BY notified_at DESC, chapter_num DESC
+            LIMIT 1
+        """
+        if cls._engine == "sqlite":
+            conn = sqlite3.connect(SQLITE_DB_PATH)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(query, (manhwa_id,)).fetchone()
+            res = dict(row) if row else None
+            conn.close()
+            return res
+        else:
+            async with cls._pool.acquire() as conn:
+                pg_query = query.replace("?", "$1")
+                row = await conn.fetchrow(pg_query, manhwa_id)
+                return dict(row) if row else None
+

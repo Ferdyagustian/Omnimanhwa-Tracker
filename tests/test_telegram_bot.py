@@ -40,7 +40,7 @@ class TestTelegramBot(unittest.TestCase):
             if isinstance(h, MessageHandler):
                 has_message_handler = True
 
-        expected_commands = {"start", "help", "add", "bind", "domain", "list", "health", "delete", "remove"}
+        expected_commands = {"start", "help", "add", "bind", "domain", "list", "check", "health", "delete", "remove"}
         self.assertTrue(expected_commands.issubset(command_names))
         self.assertTrue(has_callback_handler)
         self.assertTrue(has_message_handler)
@@ -134,6 +134,47 @@ class TestTelegramBot(unittest.TestCase):
             self.assertFalse(is_authorized(update_stranger))
         finally:
             Config.TELEGRAM_ADMIN_CHAT_ID = old_admin
+
+    def test_render_manhwa_list_with_filter(self):
+        from src.bot.telegram_bot import render_manhwa_list
+        mock_manhwas = [
+            {"id": 1, "canonical_title": "Solo Leveling", "sources": ["ASURA"], "latest_chapter_en": 180, "latest_chapter_id": 179},
+            {"id": 2, "canonical_title": "Omniscient Reader", "sources": ["MANGADEX"], "latest_chapter_en": 210, "latest_chapter_id": 200},
+        ]
+        text, markup = render_manhwa_list(mock_manhwas, page=1, filter_query="solo")
+        self.assertIn("HASIL PENCARIAN", text)
+        self.assertIn("Solo Leveling", text)
+        self.assertIn("Hal 1/1", text)
+
+    def test_render_manhwa_list_filter_no_match(self):
+        from src.bot.telegram_bot import render_manhwa_list
+        text, markup = render_manhwa_list([], page=1, filter_query="xyz")
+        self.assertIn("Tidak ditemukan manhwa dengan kata kunci", text)
+        self.assertIsNone(markup)
+
+    def test_db_get_latest_release_info(self):
+        import asyncio
+        from src.db import Database
+        async def run_async():
+            # Inisialisasi SQLite
+            Database._engine = "sqlite"
+            Database._init_sqlite()
+            m_id = await Database.insert_manhwa(None, "Test Check Manhwa", None)
+            await Database.record_chapter_log(
+                manhwa_id=m_id,
+                site_code="ASURA",
+                language="EN",
+                chapter_num=50.0,
+                chapter_raw_title="Chapter 50",
+                chapter_url="https://asura.com/ch-50"
+            )
+            rel = await Database.get_latest_release_info(m_id)
+            self.assertIsNotNone(rel)
+            self.assertEqual(rel["chapter_num"], 50.0)
+            self.assertEqual(rel["site_code"], "ASURA")
+            # Cleanup
+            await Database.delete_manhwa(m_id)
+        asyncio.run(run_async())
 
 if __name__ == "__main__":
     unittest.main()

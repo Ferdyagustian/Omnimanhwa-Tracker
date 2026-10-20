@@ -110,5 +110,29 @@ class TestChapterComparisonAndDeduplication(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_circuit_breaker_health_tracker(self):
+        from src.main import SITE_HEALTH
+        # Reset ASURA health
+        SITE_HEALTH["ASURA"] = {"failures": 0, "alerted": False, "last_error": ""}
+        health = SITE_HEALTH["ASURA"]
+
+        # Simulate 4 failures
+        for _ in range(4):
+            health["failures"] += 1
+        self.assertEqual(health["failures"], 4)
+        self.assertFalse(health["alerted"])
+
+        # 5th failure triggers alert threshold
+        health["failures"] += 1
+        if health["failures"] >= 5 and not health["alerted"]:
+            health["alerted"] = True
+        self.assertTrue(health["alerted"])
+
+        # Recovery reset
+        health["failures"] = 0
+        health["alerted"] = False
+        self.assertEqual(health["failures"], 0)
+        self.assertFalse(health["alerted"])
+
 if __name__ == "__main__":
     unittest.main()

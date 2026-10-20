@@ -41,7 +41,8 @@
 | Command | Description | Example |
 | :--- | :--- | :--- |
 | `/add [title / URL]` | Scans all supported websites and adds the manhwa to the watchlist | `/add Solo Leveling` |
-| `/list` | Displays all tracked manhwa, bound sources, and latest release statuses | `/list` |
+| `/list [page / title]` | Displays tracked manhwa with pagination jump or title keyword search | `/list solo` or `/list 3` |
+| `/check [id]` | Checks latest released chapter, detected timestamp, and source links | `/check 1` |
 | `/bind [id] [site] [slug]` | Manually binds a specific source URL or slug to an existing target | `/bind 1 KOMIKU /manga/solo-leveling` |
 | `/delete [id]` | Deletes a tracked manhwa and all associated source history | `/delete 1` |
 | `/domain [site] [new_url]`| Updates the base URL if a source site changes or redirects its domain | `/domain ASURA https://asuracomic.net` |
@@ -101,7 +102,7 @@ omnimanhwa/
 │   ├── db.py              # Database layer (PostgreSQL asyncpg + SQLite fallback)
 │   ├── main.py            # Application entry point & background tracker worker loop
 │   └── normalizer.py      # Chapter number extraction, regex rules, & title normalizer
-├── tests/                 # Unit tests (25 comprehensive test cases)
+├── tests/                 # Unit tests (34 comprehensive test cases)
 ├── docker-compose.yml     # Docker orchestration (with strict mem_limit)
 ├── Dockerfile             # Multi-stage Docker image build
 ├── init.sql               # PostgreSQL schema & retention indexes

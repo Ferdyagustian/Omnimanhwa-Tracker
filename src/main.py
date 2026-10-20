@@ -14,9 +14,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger("OMTE_CORE")
 
+# Pelacak kesehatan adapter (circuit breaker & consecutive failures)
+SITE_HEALTH: Dict[str, Dict[str, Any]] = {
+    code: {"failures": 0, "alerted": False, "last_error": ""}
+    for code in ("MGEKO", "MANGADEX", "VORTEX", "ASURA", "KOMIKU")
+}
+
 async def poll_single_source(bot, manhwa: Dict[str, Any], source: Dict[str, Any], site_cfg: Dict[str, Any]):
     """
     Memeriksa satu sumber website untuk satu judul manhwa.
+    Dilengkapi Circuit Breaker untuk mendeteksi adapter yang down secara beruntun.
     """
     site_code = source["site_code"]
     adapter_cls = ADAPTER_CLASSES.get(site_code)
@@ -34,9 +41,53 @@ async def poll_single_source(bot, manhwa: Dict[str, Any], source: Dict[str, Any]
     slug = source["relative_slug"]
     logger.info(f"[{site_code}] Memeriksa manhwa '{manhwa['canonical_title']}' ({slug})...")
     
-    chapters = await adapter.get_latest_chapters(slug)
+    health = SITE_HEALTH.setdefault(site_code, {"failures": 0, "alerted": False, "last_error": ""})
+    try:
+        chapters = await adapter.get_latest_chapters(slug)
+        last_err = ""
+    except Exception as e:
+        logger.warning(f"[{site_code}] Gagal mengambil chapter untuk '{manhwa['canonical_title']}': {e}")
+        chapters = None
+        last_err = str(e)
+
     if not chapters:
+        health["failures"] += 1
+        if last_err:
+            health["last_error"] = last_err
+        # Notifikasi darurat jika gagal >= 5x berturut-turut
+        if health["failures"] >= 5 and not health["alerted"]:
+            health["alerted"] = True
+            if Config.TELEGRAM_ADMIN_CHAT_ID:
+                try:
+                    alert_msg = (
+                        f"⚠️ *PERINGATAN ADAPTER DOWN!*\n"
+                        f"────────────────────────\n"
+                        f"🌐 Situs  : `{site_code}`\n"
+                        f"❌ Status : Gagal {health['failures']}x berturut-turut\n"
+                        f"📝 Detail : `{health['last_error'] or 'Gagal memuat chapter atau selector HTML berubah'}`\n"
+                        f"────────────────────────\n"
+                        f"💡 _Periksa situs atau ubah base URL dengan:_ `/domain {site_code} [new_url]`"
+                    )
+                    await bot.send_message(chat_id=Config.TELEGRAM_ADMIN_CHAT_ID, text=alert_msg, parse_mode="Markdown")
+                except Exception as te:
+                    logger.error(f"Gagal mengirim Telegram alert: {te}")
         return
+
+    # Pemulihan (Recovery) jika sebelumnya sempat berstatus alerted
+    if health.get("alerted"):
+        if Config.TELEGRAM_ADMIN_CHAT_ID:
+            try:
+                rec_msg = (
+                    f"✅ *ADAPTER PULIH!*\n"
+                    f"────────────────────────\n"
+                    f"🌐 Situs `{site_code}` telah kembali normal dan berhasil merespons rilis chapter."
+                )
+                await bot.send_message(chat_id=Config.TELEGRAM_ADMIN_CHAT_ID, text=rec_msg, parse_mode="Markdown")
+            except Exception as te:
+                logger.error(f"Gagal mengirim Telegram recovery alert: {te}")
+
+    health["failures"] = 0
+    health["alerted"] = False
 
     default_lang = site_cfg.get("language", "EN")
 
